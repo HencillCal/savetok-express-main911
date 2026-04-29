@@ -18,7 +18,7 @@ export const PlatformRouteLinks = ({
   const platforms = includeTinyUrl ? PLATFORM_CONFIGS : MEDIA_PLATFORM_CONFIGS;
 
   return (
-    <div className={`grid gap-3 ${compact ? "sm:grid-cols-3 lg:grid-cols-6" : "sm:grid-cols-2 xl:grid-cols-4"}`}>
+    <div className={`grid gap-3 ${compact ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-6" : "grid-cols-2 sm:grid-cols-2 xl:grid-cols-4"}`}>
       {platforms
         .filter((platform) => platform.key !== current)
         .map((platform) => {
