@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme - warm cream/beige */
+    --background: 35 40% 97%;
+    --foreground: 25 30% 15%;
+
+    --card: 35 40% 100%;
+    --card-foreground: 25 30% 15%;
+
+    --popover: 35 40% 100%;
+    --popover-foreground: 25 30% 15%;
+
+    --primary: 22 75% 48%;
+    --primary-foreground: 35 40% 98%;
+    --primary-glow: 32 85% 58%;
+
+    --secondary: 30 30% 92%;
+    --secondary-foreground: 25 30% 15%;
+
+    --muted: 30 25% 92%;
+    --muted-foreground: 25 15% 40%;
+
+    --accent: 28 60% 88%;
+    --accent-foreground: 25 30% 15%;
+
+    --destructive: 0 75% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 30 25% 86%;
+    --input: 30 25% 86%;
+    --ring: 22 75% 50%;
+
+    --radius: 0.875rem;
+
+    --gradient-hero: linear-gradient(135deg, hsl(20 70% 45%) 0%, hsl(28 80% 58%) 50%, hsl(38 85% 68%) 100%);
+    --gradient-soft: linear-gradient(180deg, hsl(35 50% 95%) 0%, hsl(35 40% 97%) 100%);
+    --gradient-card: linear-gradient(135deg, hsl(22 70% 55% / 0.10), hsl(32 80% 65% / 0.10));
+    --shadow-elegant: 0 20px 50px -20px hsl(22 70% 50% / 0.25);
+    --shadow-soft: 0 4px 20px -4px hsl(25 30% 15% / 0.08);
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    /* Dark theme - warm brown */
+    --background: 25 25% 12%;
+    --foreground: 30 30% 96%;
+
+    --card: 25 25% 16%;
+    --card-foreground: 30 30% 96%;
+
+    --popover: 25 25% 16%;
+    --popover-foreground: 30 30% 96%;
+
+    --primary: 22 70% 50%;
+    --primary-foreground: 30 40% 98%;
+    --primary-glow: 32 80% 60%;
+
+    --secondary: 25 22% 20%;
+    --secondary-foreground: 30 30% 96%;
+
+    --muted: 25 22% 20%;
+    --muted-foreground: 30 15% 70%;
+
+    --accent: 22 50% 28%;
+    --accent-foreground: 30 30% 96%;
+
+    --destructive: 0 75% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 25 22% 24%;
+    --input: 25 22% 24%;
+    --ring: 22 70% 55%;
+
+    --gradient-hero: linear-gradient(135deg, hsl(20 65% 40%) 0%, hsl(28 75% 55%) 50%, hsl(38 80% 65%) 100%);
+    --gradient-soft: linear-gradient(180deg, hsl(22 40% 18%) 0%, hsl(25 25% 12%) 100%);
+    --gradient-card: linear-gradient(135deg, hsl(22 70% 55% / 0.15), hsl(32 80% 65% / 0.15));
+    --shadow-elegant: 0 20px 50px -20px hsl(22 70% 50% / 0.35);
+    --shadow-soft: 0 4px 20px -4px hsl(0 0% 0% / 0.3);
+
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+    transition: background-color 400ms ease, color 400ms ease;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+    transition-duration: 400ms;
+    transition-timing-function: ease;
+  }
+  /* Avoid transitioning interactive/animated elements to keep them snappy */
+  button,
+  a,
+  [role="button"],
+  input,
+  textarea,
+  select {
+    transition-duration: 200ms;
+  }
+}
+
+@layer utilities {
+  .bg-gradient-hero {
+    background: var(--gradient-hero);
+  }
+  .bg-gradient-soft {
+    background: var(--gradient-soft);
+  }
+  .bg-gradient-card {
+    background: var(--gradient-card);
+  }
+  .shadow-elegant {
+    box-shadow: var(--shadow-elegant);
+  }
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+  .text-gradient {
+    background: var(--gradient-hero);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
