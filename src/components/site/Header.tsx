@@ -98,6 +98,16 @@ export const Header = () => {
           ))}
           <DownloaderMenu />
           <NavLink
+            to="/tinyurl"
+            className={({ isActive }) =>
+              `text-sm font-medium transition-colors hover:text-foreground ${
+                isActive ? "text-foreground" : "text-muted-foreground"
+              }`
+            }
+          >
+            Shorteners
+          </NavLink>
+          <NavLink
             to="/pro"
             className={({ isActive }) =>
               `text-sm font-medium transition-colors hover:text-foreground ${
@@ -183,6 +193,19 @@ export const Header = () => {
                   <div className="px-1 py-1">
                     <DownloaderMenu onItemClick={() => setOpen(false)} triggerClassName="w-full justify-between rounded-md px-3 py-2.5 text-base font-medium text-muted-foreground hover:text-foreground" />
                   </div>
+                  <NavLink
+                    to="/tinyurl"
+                    onClick={() => setOpen(false)}
+                    className={({ isActive }) =>
+                      `rounded-md px-3 py-2.5 text-base font-medium transition-colors ${
+                        isActive
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      }`
+                    }
+                  >
+                    Shorteners
+                  </NavLink>
                   <NavLink
                     to="/pro"
                     onClick={() => setOpen(false)}

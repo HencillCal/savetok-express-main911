@@ -14,6 +14,7 @@ const TinyUrl = () => {
   const [shortenLoading, setShortenLoading] = useState(false);
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
   const [shortUrl, setShortUrl] = useState<string | null>(null);
+  const [provider, setProvider] = useState<string>("tinyurl");
 
   const copyText = async (text: string) => {
     try {
@@ -35,8 +36,10 @@ const TinyUrl = () => {
     else setShortenLoading(true);
 
     try {
+      const payloadBody: any = { action, url: trimmed };
+      if (action === "shorten") payloadBody.provider = provider;
       const { data, error } = await supabase.functions.invoke("tinyurl-tools", {
-        body: { action, url: trimmed },
+        body: payloadBody,
       });
       if (error) throw new Error(error.message);
       if (data?.error) throw new Error(data.error);
@@ -80,31 +83,45 @@ const TinyUrl = () => {
           </div>
 
           <div className="mx-auto mt-8 max-w-3xl">
-            <Card className="p-4 shadow-elegant">
-              <Input
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                placeholder="Paste a TinyURL or long URL here..."
-                className="h-12 text-base"
-              />
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <Button
-                  onClick={() => void callTinyUrlTool("resolve")}
-                  disabled={resolveLoading || shortenLoading}
-                  className="bg-gradient-hero"
-                >
-                  {resolveLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-                  Resolve TinyURL
-                </Button>
-                <Button
-                  onClick={() => void callTinyUrlTool("shorten")}
-                  disabled={resolveLoading || shortenLoading}
-                  variant="outline"
-                >
-                  {shortenLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
-                  Create short URL
-                </Button>
-              </div>
+                <Card className="p-4 shadow-elegant">
+                  <Input
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    placeholder="Paste a TinyURL or long URL here..."
+                    className="h-12 text-base"
+                  />
+                  <div className="mt-3 flex items-center gap-3">
+                    <label className="text-xs text-muted-foreground">Shortener</label>
+                    <select
+                      value={provider}
+                      onChange={(e) => setProvider(e.target.value)}
+                      className="rounded-md border border-border bg-background/60 px-3 py-1 text-sm"
+                    >
+                      <option value="tinyurl">TinyURL</option>
+                      <option value="is.gd">is.gd</option>
+                      <option value="v.gd">v.gd</option>
+                      <option value="da.gd">da.gd</option>
+                      <option value="bitly">Bitly (server config)</option>
+                    </select>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <Button
+                      onClick={() => void callTinyUrlTool("resolve")}
+                      disabled={resolveLoading || shortenLoading}
+                      className="bg-gradient-hero"
+                    >
+                      {resolveLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                      Resolve TinyURL
+                    </Button>
+                    <Button
+                      onClick={() => void callTinyUrlTool("shorten")}
+                      disabled={resolveLoading || shortenLoading}
+                      variant="outline"
+                    >
+                      {shortenLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <WandSparkles className="h-4 w-4" />}
+                      Create short URL
+                    </Button>
+                  </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <Card className="border-border bg-background/60 p-4">
