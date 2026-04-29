@@ -173,11 +173,13 @@ const Pro = () => {
 
       <div className="container py-16 md:py-24">
         <div className="mx-auto max-w-2xl text-center">
-          <BackToHome />
-          <span className="mt-6 inline-flex items-center gap-2 rounded-full border border-border bg-background/60 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-soft backdrop-blur">
-            <Crown className="h-3.5 w-3.5 text-primary" />
-            MDounloader Pro
-          </span>
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <BackToHome className="rounded-full px-4 py-1.5 text-xs font-medium" />
+            <span className="inline-flex items-center gap-2 rounded-full border border-border bg-background/60 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-soft backdrop-blur">
+              <Crown className="h-3.5 w-3.5 text-primary" />
+              MDounloader Pro
+            </span>
+          </div>
           <h1 className="mt-6 text-4xl font-extrabold tracking-tight sm:text-5xl">
             Go <span className="text-gradient">unlimited</span>
           </h1>
