@@ -340,35 +340,35 @@ export const Downloader = () => {
                       Preview: <span className="font-mono text-foreground">{tkName("video", `${result.author.unique_id}.mp4`)}</span>
                     </p>
                   </div>
-                  <div className="mt-5 grid gap-2 sm:grid-cols-2">
-                    {result.type === "slideshow" && result.images && result.images.length > 0 && (
-                      <Button
-                        onClick={() => guardedDownload(() => downloadSlideshowZip(result.images!, result.author.unique_id || "tiktok"))}
-                        className="bg-gradient-hero sm:col-span-2"
-                      >
-                        <Images className="h-4 w-4" /> Download all images (ZIP)
-                      </Button>
-                    )}
-                    {result.downloads.no_watermark && (
-                      <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.no_watermark!, tkName("video", `${result.author.unique_id}.mp4`)))} className="bg-gradient-hero">
-                        <Video className="h-4 w-4" /> MP4 - No Watermark (Recommended)
-                      </Button>
-                    )}
-                    {result.downloads.no_watermark_hd && (
-                      <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.no_watermark_hd!, tkName("video-hd", `${result.author.unique_id}-hd.mp4`)))} variant="outline">
-                        <Video className="h-4 w-4" /> HD (HEVC - may need codec)
-                      </Button>
-                    )}
-                    {result.downloads.watermark && (
-                      <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.watermark!, tkName("video-wm", `${result.author.unique_id}-wm.mp4`)))} variant="outline">
-                        <Video className="h-4 w-4" /> With Watermark
-                      </Button>
-                    )}
-                    {result.downloads.music && (
-                      <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.music!, tkName("audio", `${result.author.unique_id}.mp3`)))} variant="outline">
-                        <Music className="h-4 w-4" /> MP3 Audio
-                      </Button>
-                    )}
+                  <div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-2">
+                      {result.type === "slideshow" && result.images && result.images.length > 0 && (
+                        <Button
+                          onClick={() => guardedDownload(() => downloadSlideshowZip(result.images!, result.author.unique_id || "tiktok"))}
+                          className="bg-gradient-hero col-span-2"
+                        >
+                          <Images className="h-4 w-4" /> Download all images (ZIP)
+                        </Button>
+                      )}
+                      {result.downloads.no_watermark && (
+                        <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.no_watermark!, tkName("video", `${result.author.unique_id}.mp4`)))} className="bg-gradient-hero">
+                          <Video className="h-4 w-4" /> MP4 - No Watermark
+                        </Button>
+                      )}
+                      {result.downloads.no_watermark_hd && (
+                        <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.no_watermark_hd!, tkName("video-hd", `${result.author.unique_id}-hd.mp4`)))} variant="outline">
+                          <Video className="h-4 w-4" /> HD (HEVC)
+                        </Button>
+                      )}
+                      {result.downloads.watermark && (
+                        <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.watermark!, tkName("video-wm", `${result.author.unique_id}-wm.mp4`)))} variant="outline">
+                          <Video className="h-4 w-4" /> With Watermark
+                        </Button>
+                      )}
+                      {result.downloads.music && (
+                        <Button onClick={() => guardedDownload(() => triggerDownload(result.downloads.music!, tkName("audio", `${result.author.unique_id}.mp3`)))} variant="outline">
+                          <Music className="h-4 w-4" /> MP3 Audio
+                        </Button>
+                      )}
                   </div>
                 </div>
               </div>
