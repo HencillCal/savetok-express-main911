@@ -152,4 +152,28 @@
     background-clip: text;
     color: transparent;
   }
+  @keyframes slide-x {
+    0% {
+      transform: translateX(-6px);
+    }
+    50% {
+      transform: translateX(6px);
+    }
+    100% {
+      transform: translateX(-6px);
+    }
+  }
+
+  .animate-slide-x {
+    display: inline-block;
+    animation: slide-x 3s ease-in-out infinite;
+    will-change: transform;
+  }
+
+  /* Pause the animation when the parent button is hovered or focused */
+  .mode-anim:hover .animate-slide-x,
+  .mode-anim:focus-within .animate-slide-x,
+  .mode-anim:focus .animate-slide-x {
+    animation-play-state: paused;
+  }
 }

@@ -269,15 +269,15 @@ export const MediaDownloaderPage = ({
                     setResult(null);
                     setQueue([]);
                   }}
-                  className={`flex min-h-[104px] flex-col items-start gap-1 rounded-xl border p-3 text-left transition ${
+                  className={`mode-anim flex min-h-[104px] flex-col items-start gap-1 rounded-xl border p-3 text-left transition ${
                     active
                       ? "border-primary bg-primary/10 shadow-soft"
                       : "border-border bg-background/70 hover:border-primary/40"
                   }`}
                 >
                   <Icon className={`h-4 w-4 ${active ? "text-primary" : "text-muted-foreground"}`} />
-                  <span className="text-sm font-semibold">{item.label}</span>
-                  <span className="text-xs text-muted-foreground">{item.description}</span>
+                  <span className="text-sm font-semibold animate-slide-x">{item.label}</span>
+                  <span className="text-xs text-muted-foreground animate-slide-x">{item.description}</span>
                 </button>
               );
             })}
