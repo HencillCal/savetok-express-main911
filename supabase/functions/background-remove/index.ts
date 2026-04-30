@@ -13,53 +13,72 @@ Deno.serve(async (req) => {
       return json({ error: "Missing image (data URL) or image_url" }, 400);
     }
 
-    const removeBgKey = Deno.env.get("REMOVE_BG_API_KEY");
-    if (!removeBgKey) {
+    // Support multiple keys: primary (comma-separated allowed) and an optional fallback.
+    const primaryRaw = Deno.env.get("REMOVE_BG_API_KEY") ?? "";
+    const fallbackRaw = Deno.env.get("REMOVE_BG_API_KEY_FALLBACK") ?? "";
+
+    const keys = [
+      ...primaryRaw.split(",").map((k) => k.trim()).filter(Boolean),
+      ...fallbackRaw.split(",").map((k) => k.trim()).filter(Boolean),
+    ];
+    const uniqKeys = Array.from(new Set(keys));
+    if (uniqKeys.length === 0) {
       return json({ error: "Background removal not configured on server (set REMOVE_BG_API_KEY)" }, 400);
     }
 
-    const form = new FormData();
-    if (image) {
-      const str = String(image);
-      const match = str.match(/^data:(image\/[\w.+-]+);base64,(.+)$/);
-      if (match) {
-        form.append("image_file_b64", match[2]);
+    const buildForm = () => {
+      const f = new FormData();
+      if (image) {
+        const str = String(image);
+        const match = str.match(/^data:(image\/[\w.+-]+);base64,(.+)$/);
+        if (match) {
+          f.append("image_file_b64", match[2]);
+        } else {
+          f.append("image_file_b64", str);
+        }
       } else {
-        form.append("image_file_b64", str);
+        f.append("image_url", String(image_url));
       }
-    } else {
-      form.append("image_url", String(image_url));
-    }
+      f.append("size", "auto");
+      f.append("format", "png");
+      return f;
+    };
 
-    form.append("size", "auto");
-    form.append("format", "png");
-
-    const resp = await fetchWithRetry("https://api.remove.bg/v1.0/removebg", {
-      method: "POST",
-      headers: {
-        "X-Api-Key": removeBgKey,
-        "User-Agent": USER_AGENT,
-      },
-      body: form,
-    }, { attempts: 3, backoffMs: 500 });
-
-    if (!resp.ok) {
-      let errMsg = `Remove.bg error ${resp.status}`;
+    let lastErr: string | null = null;
+    for (const key of uniqKeys) {
       try {
-        const payload = await resp.json();
-        errMsg = payload?.errors?.[0]?.title ?? payload?.error ?? payload?.message ?? errMsg;
-      } catch {
-        // ignore
+        const form = buildForm();
+        const resp = await fetchWithRetry("https://api.remove.bg/v1.0/removebg", {
+          method: "POST",
+          headers: {
+            "X-Api-Key": key,
+            "User-Agent": USER_AGENT,
+          },
+          body: form,
+        }, { attempts: 3, backoffMs: 500 });
+
+        if (!resp.ok) {
+          try {
+            const payload = await resp.json();
+            lastErr = payload?.errors?.[0]?.title ?? payload?.error ?? payload?.message ?? `Remove.bg error ${resp.status}`;
+          } catch {
+            lastErr = `Remove.bg error ${resp.status}`;
+          }
+          continue;
+        }
+
+        const arrayBuffer = await resp.arrayBuffer();
+        const b64 = arrayBufferToBase64(arrayBuffer);
+        const contentType = resp.headers.get("Content-Type") ?? "image/png";
+        const dataUrl = `data:${contentType};base64,${b64}`;
+
+        return json({ resultDataUrl: dataUrl });
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : String(err);
       }
-      return json({ error: errMsg }, 400);
     }
 
-    const arrayBuffer = await resp.arrayBuffer();
-    const b64 = arrayBufferToBase64(arrayBuffer);
-    const contentType = resp.headers.get("Content-Type") ?? "image/png";
-    const dataUrl = `data:${contentType};base64,${b64}`;
-
-    return json({ resultDataUrl: dataUrl });
+    return json({ error: lastErr ?? "Background removal failed with configured keys" }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return json({ error: message }, 500);

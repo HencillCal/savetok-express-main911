@@ -14,6 +14,31 @@ const BackgroundRemover = () => {
   const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Downscale large images on the client to reduce payload size and speed up processing.
+  const downscaleDataUrl = (dataUrl: string, max = 1200) =>
+    new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width;
+        const h = img.height;
+        const scale = Math.min(1, max / Math.max(w, h));
+        if (scale === 1) return resolve(dataUrl);
+        const cw = Math.max(1, Math.round(w * scale));
+        const ch = Math.max(1, Math.round(h * scale));
+        const c = document.createElement("canvas");
+        c.width = cw;
+        c.height = ch;
+        const ctx = c.getContext("2d");
+        if (!ctx) return reject(new Error("Canvas not supported"));
+        ctx.drawImage(img, 0, 0, cw, ch);
+        // Use JPEG to reduce payload size; remove.bg accepts JPEG inputs.
+        const out = c.toDataURL("image/jpeg", 0.85);
+        resolve(out);
+      };
+      img.onerror = (e) => reject(new Error("Could not load image"));
+      img.src = dataUrl;
+    });
+
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
     if (!f) {
@@ -46,7 +71,9 @@ const BackgroundRemover = () => {
     setLoading(true);
     setResult(null);
     try {
-      const resp = await invokePublicFunction<{ resultDataUrl?: string }>("background-remove", { image: preview });
+      // Downscale before sending to reduce request size and speed up background removal.
+      const toSend = await downscaleDataUrl(preview, 1200).catch(() => preview);
+      const resp = await invokePublicFunction<{ resultDataUrl?: string }>("background-remove", { image: toSend });
       if (resp?.resultDataUrl) {
         setResult(resp.resultDataUrl);
         toast.success("Background removed");
@@ -103,18 +130,36 @@ const BackgroundRemover = () => {
 
           <div className="mx-auto mt-8 max-w-3xl">
             <Card className="p-4 shadow-elegant">
-              <Input type="file" accept="image/*" onChange={onFileChange} className="h-12 text-base" />
+              <div className="flex items-center justify-between gap-4">
+                <Input type="file" accept="image/*" onChange={onFileChange} className="h-12 text-base" aria-label="Upload image" />
+                <div className="text-sm text-muted-foreground">{file?.name ?? "No file selected"}</div>
+              </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <div>
+                <div className="relative">
                   {preview ? (
                     <img src={preview} alt="preview" className="rounded-md border border-border max-h-64 w-full object-contain" />
                   ) : (
-                    <div className="rounded-md border border-border bg-background/60 p-6 text-center text-muted-foreground">No image chosen.</div>
+                    <div className="rounded-md border border-border bg-background/60 p-6 text-center text-muted-foreground">
+                      <div className="mx-auto mb-2 inline-flex items-center justify-center rounded-full bg-muted p-3">
+                        <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                      </div>
+                      <div className="text-sm font-medium">No image selected</div>
+                      <div className="mt-1 text-xs text-muted-foreground">Choose an image to remove its background.</div>
+                    </div>
+                  )}
+
+                  {loading && (
+                    <div className="absolute inset-0 flex items-center justify-center rounded-md bg-black/30">
+                      <div className="flex items-center gap-2 rounded-md bg-background/80 px-3 py-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span className="text-sm">Processing image…</span>
+                      </div>
+                    </div>
                   )}
 
                   <div className="mt-3 flex gap-2">
-                    <Button onClick={clear} variant="ghost">
+                    <Button onClick={clear} variant="ghost" disabled={loading || !preview}>
                       <Trash2 className="h-4 w-4" />
                       Clear
                     </Button>
@@ -152,7 +197,13 @@ const BackgroundRemover = () => {
                       </div>
                     </>
                   ) : (
-                    <div className="rounded-md border border-border bg-background/60 p-6 text-center text-muted-foreground">No result yet.</div>
+                    <div className="rounded-md border border-border bg-background/60 p-6 text-center text-muted-foreground">
+                      <div className="mx-auto mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                        <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                      <div className="text-sm font-medium">No result yet</div>
+                      <div className="mt-1 text-xs text-muted-foreground">Upload an image and click "Remove Background" to see the result.</div>
+                    </div>
                   )}
                 </div>
               </div>

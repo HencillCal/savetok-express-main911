@@ -4,7 +4,6 @@ const LOCAL_DEV_FUNCTIONS = new Set([
   "facebook-download",
   "tinyurl-tools",
   "youtube-download",
-  "background-remove",
 ]);
 
 export const usesLocalDevFunction = (functionName: string) =>
