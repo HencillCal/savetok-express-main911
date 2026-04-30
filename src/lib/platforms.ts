@@ -63,6 +63,13 @@ export const PLATFORM_CONFIGS: PlatformConfig[] = [
     icon: BriefcaseBusiness,
   },
   {
+    key: "background-remover",
+    name: "Background Remover",
+    route: "/background-remover",
+    blurb: "Remove image backgrounds and download transparent PNGs.",
+    icon: ImageIcon,
+  },
+  {
     key: "tinyurl",
     name: "TinyURL",
     route: "/tinyurl",

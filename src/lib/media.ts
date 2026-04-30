@@ -5,7 +5,8 @@ export type PlatformKey =
   | "youtube"
   | "twitter"
   | "linkedin"
-  | "tinyurl";
+  | "tinyurl"
+  | "background-remover";
 
 export type MediaKind = "video" | "image" | "audio" | "thumbnail" | "link";
 export type MergeStrategy = "mux-mp4";

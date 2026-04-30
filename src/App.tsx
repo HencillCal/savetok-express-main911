@@ -14,6 +14,7 @@ import YouTube from "./pages/YouTube.tsx";
 import Twitter from "./pages/Twitter.tsx";
 import LinkedIn from "./pages/LinkedIn.tsx";
 import TinyUrl from "./pages/TinyUrl.tsx";
+import BackgroundRemover from "./pages/BackgroundRemover.tsx";
 
 const queryClient = new QueryClient();
 
@@ -34,6 +35,7 @@ const App = () => (
           <Route path="/twitter" element={<Twitter />} />
           <Route path="/linkedin" element={<LinkedIn />} />
           <Route path="/tinyurl" element={<TinyUrl />} />
+          <Route path="/background-remover" element={<BackgroundRemover />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
