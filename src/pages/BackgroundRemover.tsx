@@ -11,6 +11,7 @@ import { invokePublicFunction } from "@/lib/public-functions";
 const BackgroundRemover = () => {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [fileType, setFileType] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -44,16 +45,27 @@ const BackgroundRemover = () => {
     if (!f) {
       setFile(null);
       setPreview(null);
+      setFileType(null);
       return;
     }
     if (!f.type.startsWith("image/")) {
-      toast.error("Please select an image file");
-      return;
+      // allow videos too
+      if (!f.type.startsWith("video/")) {
+        toast.error("Please select an image or video file");
+        return;
+      }
     }
     setFile(f);
-    const reader = new FileReader();
-    reader.onload = () => setPreview(reader.result as string);
-    reader.readAsDataURL(f);
+    // preview images and GIFs via dataURL, videos via object URL
+    if (f.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = () => setPreview(reader.result as string);
+      reader.readAsDataURL(f);
+    } else {
+      // video preview
+      setPreview(URL.createObjectURL(f));
+    }
+    setFileType(f.type);
     setResult(null);
   };
 
@@ -64,22 +76,75 @@ const BackgroundRemover = () => {
   };
 
   const callRemove = async () => {
-    if (!preview) {
-      toast.error("Upload an image first");
+    if (!file || !preview) {
+      toast.error("Upload a file first");
       return;
     }
     setLoading(true);
     setResult(null);
+
     try {
-      // Downscale before sending to reduce request size and speed up background removal.
-      const toSend = await downscaleDataUrl(preview, 1200).catch(() => preview);
-      const resp = await invokePublicFunction<{ resultDataUrl?: string }>("background-remove", { image: toSend });
-      if (resp?.resultDataUrl) {
-        setResult(resp.resultDataUrl);
-        toast.success("Background removed");
-      } else {
-        throw new Error("No result returned from function");
+      // Image flows (including GIFs) — downscale and call image function
+      if (file.type.startsWith("image/")) {
+        // Special-case animated GIFs: upload original gif and let the server call remove.bg with image_url
+        if (file.type === "image/gif") {
+          const buffer = await file.arrayBuffer();
+          let binary = "";
+          const bytes = new Uint8Array(buffer);
+          for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+          const file_b64 = btoa(binary);
+
+          const uploadResp = await invokePublicFunction<{ fileUrl?: string }>("background-upload", {
+            file_b64,
+            filename: file.name,
+            content_type: file.type,
+          });
+          if (!uploadResp?.fileUrl) throw new Error("Upload failed");
+
+          const resp = await invokePublicFunction<{ resultDataUrl?: string }>("background-remove", { image_url: uploadResp.fileUrl });
+          if (resp?.resultDataUrl) {
+            setResult(resp.resultDataUrl);
+            toast.success("Background removed");
+          } else {
+            throw new Error(resp?.error ?? "No result returned from function");
+          }
+          return;
+        }
+
+        const toSend = await downscaleDataUrl(preview, 1200).catch(() => preview);
+        const resp = await invokePublicFunction<{ resultDataUrl?: string }>("background-remove", { image: toSend });
+        if (resp?.resultDataUrl) {
+          setResult(resp.resultDataUrl);
+          toast.success("Background removed");
+        } else {
+          throw new Error("No result returned from function");
+        }
+        return;
       }
+
+      // Video flow: upload file to storage via background-upload function, then attempt processing for GIFs
+      if (file.type.startsWith("video/")) {
+        // read file as arrayBuffer -> base64
+        const buffer = await file.arrayBuffer();
+        let binary = "";
+        const bytes = new Uint8Array(buffer);
+        for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
+        const file_b64 = btoa(binary);
+
+        const uploadResp = await invokePublicFunction<{ fileUrl?: string }>("background-upload", {
+          file_b64,
+          filename: file.name,
+          content_type: file.type,
+        });
+        if (!uploadResp?.fileUrl) throw new Error("Upload failed");
+        // For videos we currently only store and return URL — video background removal is not implemented server-side yet.
+        toast.success("Video uploaded — processing not supported yet");
+        setResult(uploadResp.fileUrl);
+        return;
+      }
+
+      // Fallback
+      throw new Error("Unsupported file type");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Background removal failed";
       toast.error(msg);
@@ -131,14 +196,18 @@ const BackgroundRemover = () => {
           <div className="mx-auto mt-8 max-w-3xl">
             <Card className="p-4 shadow-elegant">
               <div className="flex items-center justify-between gap-4">
-                <Input type="file" accept="image/*" onChange={onFileChange} className="h-12 text-base" aria-label="Upload image" />
+                <Input type="file" accept="image/*,video/*" onChange={onFileChange} className="h-12 text-base" aria-label="Upload image or video" />
                 <div className="text-sm text-muted-foreground">{file?.name ?? "No file selected"}</div>
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <div className="relative">
                   {preview ? (
-                    <img src={preview} alt="preview" className="rounded-md border border-border max-h-64 w-full object-contain" />
+                    fileType && fileType.startsWith("video/") ? (
+                      <video src={preview} controls className="rounded-md border border-border max-h-64 w-full object-contain" />
+                    ) : (
+                      <img src={preview} alt="preview" className="rounded-md border border-border max-h-64 w-full object-contain" />
+                    )
                   ) : (
                     <div className="rounded-md border border-border bg-background/60 p-6 text-center text-muted-foreground">
                       <div className="mx-auto mb-2 inline-flex items-center justify-center rounded-full bg-muted p-3">
@@ -174,27 +243,57 @@ const BackgroundRemover = () => {
                   <p className="text-xs font-medium text-muted-foreground">Result</p>
                   {result ? (
                     <>
-                      <img src={result} alt="result" className="rounded-md border border-border max-h-64 w-full object-contain" />
-                      <div className="mt-3 flex gap-2">
-                        <Button onClick={downloadResult} size="sm" className="bg-gradient-hero">
-                          <Download className="h-4 w-4" />
-                          Download
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            try {
-                              navigator.clipboard.writeText(result);
-                              toast.success("Copied data URL");
-                            } catch {
-                              toast.error("Could not copy");
-                            }
-                          }}
-                        >
-                          Copy URL
-                        </Button>
-                      </div>
+                      {fileType && fileType.startsWith("video/") ? (
+                        <>
+                          <video src={result} controls className="rounded-md border border-border max-h-64 w-full object-contain" />
+                          <div className="mt-3 flex gap-2">
+                            <a href={result} target="_blank" rel="noreferrer" className="inline-block">
+                              <Button size="sm" className="bg-gradient-hero">
+                                <Download className="h-4 w-4" />
+                                Open / Download
+                              </Button>
+                            </a>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                try {
+                                  navigator.clipboard.writeText(result);
+                                  toast.success("Copied URL");
+                                } catch {
+                                  toast.error("Could not copy");
+                                }
+                              }}
+                            >
+                              Copy URL
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <img src={result} alt="result" className="rounded-md border border-border max-h-64 w-full object-contain" />
+                          <div className="mt-3 flex gap-2">
+                            <Button onClick={downloadResult} size="sm" className="bg-gradient-hero">
+                              <Download className="h-4 w-4" />
+                              Download
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                try {
+                                  navigator.clipboard.writeText(result);
+                                  toast.success("Copied data URL");
+                                } catch {
+                                  toast.error("Could not copy");
+                                }
+                              }}
+                            >
+                              Copy URL
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </>
                   ) : (
                     <div className="rounded-md border border-border bg-background/60 p-6 text-center text-muted-foreground">
