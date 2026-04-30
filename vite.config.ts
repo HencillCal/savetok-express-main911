@@ -6,12 +6,14 @@ import { componentTagger } from "lovable-tagger";
 import { handleFacebookDownload } from "./dev/functions/facebook";
 import { handlePaystackInitialize, handlePaystackVerify } from "./dev/functions/paystack";
 import { handleYouTubeDownload } from "./dev/functions/youtube";
+import { handleTinyUrl } from "./dev/functions/tinyurl-tools";
 
 const devFunctionHandlers: Record<string, (request: Request) => Promise<Response>> = {
   "facebook-download": handleFacebookDownload,
   "youtube-download": handleYouTubeDownload,
   "paystack-initialize": handlePaystackInitialize,
   "paystack-verify": handlePaystackVerify,
+  "tinyurl-tools": handleTinyUrl,
 };
 
 const toWebRequest = (req: import("node:http").IncomingMessage) => {

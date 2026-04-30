@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 
 const LOCAL_DEV_FUNCTIONS = new Set([
   "facebook-download",
+  "tinyurl-tools",
   "youtube-download",
 ]);
 

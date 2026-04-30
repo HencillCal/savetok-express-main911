@@ -87,8 +87,37 @@ export async function resolveShortUrl(input: string, maxHops = 6) {
       break;
     }
 
-    const hostname = parsed.hostname.toLowerCase();
-    if (!["tinyurl.com", "www.tinyurl.com", "tiny.one"].includes(hostname)) break;
+    // Only attempt to follow redirects for known shortener hosts
+    const allowedShortenerHosts = [
+      "tinyurl.com",
+      "tiny.one",
+      "is.gd",
+      "v.gd",
+      "da.gd",
+      "bit.ly",
+      "t.co",
+      "tiny.cc",
+      "shorturl.at",
+      "rebrand.ly",
+      "cutt.ly",
+      "t.ly",
+      "ow.ly",
+      "short.io",
+      "buff.ly",
+      "lnkd.in",
+      "trib.al",
+      "soo.gd",
+      "su.pr",
+      "bit.do",
+      "qr.ae",
+      "chilp.it",
+      "ity.im",
+      "po.st",
+      "snip.ly",
+      "bc.vc",
+      "u.nu",
+    ];
+    if (!isAllowedHost(parsed.hostname, allowedShortenerHosts)) break;
 
     const response = await fetch(current, {
       method: "GET",

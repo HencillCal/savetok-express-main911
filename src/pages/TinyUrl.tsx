@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { supabase } from "@/integrations/supabase/client";
+import { invokePublicFunction } from "@/lib/public-functions";
 
 const TinyUrl = () => {
   const [value, setValue] = useState("");
@@ -38,10 +39,7 @@ const TinyUrl = () => {
     try {
       const payloadBody: any = { action, url: trimmed };
       if (action === "shorten") payloadBody.provider = provider;
-      const { data, error } = await supabase.functions.invoke("tinyurl-tools", {
-        body: payloadBody,
-      });
-      if (error) throw new Error(error.message);
+      const data = await invokePublicFunction<any>("tinyurl-tools", payloadBody);
       if (data?.error) throw new Error(data.error);
 
       if (action === "resolve") {
@@ -71,7 +69,7 @@ const TinyUrl = () => {
               TinyURL tools
             </span>
             <h1 className="mt-6 text-4xl font-extrabold tracking-tight sm:text-5xl">
-              Resolve TinyURL links and create new short URLs
+              Resolve Short URLs and create new short links
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-base text-muted-foreground sm:text-lg">
               Expand a TinyURL before sending it into another downloader, or make a new short link from any public URL.
@@ -111,7 +109,7 @@ const TinyUrl = () => {
                       className="bg-gradient-hero"
                     >
                       {resolveLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-                      Resolve TinyURL
+                        Resolve Short URL
                     </Button>
                     <Button
                       onClick={() => void callTinyUrlTool("shorten")}
