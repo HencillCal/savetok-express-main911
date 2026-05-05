@@ -69,8 +69,8 @@ Deno.serve(async (req) => {
 
         const arrayBuffer = await resp.arrayBuffer();
         const b64 = arrayBufferToBase64(arrayBuffer);
-        const contentType = resp.headers.get("Content-Type") ?? "image/png";
-        const dataUrl = `data:${contentType};base64,${b64}`;
+        // Always tag as PNG — remove.bg uses format=png; odd Content-Type values broke client GIF encoding checks.
+        const dataUrl = `data:image/png;base64,${b64}`;
 
         return json({ resultDataUrl: dataUrl });
       } catch (err) {

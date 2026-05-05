@@ -1,0 +1,10 @@
+version: "3.8"
+services:
+  perframe:
+    build: ./services/perframe
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    # Mount a host folder for models if you want to persist them between runs:
+    # volumes:
+    #   - ./services/perframe/models:/root/.u2net

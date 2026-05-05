@@ -12,3 +12,14 @@ services:
       - path: /*
         name: X-Frame-Options
         value: SAMEORIGIN
+  - type: web
+    name: perframe-service
+    env: docker
+    dockerfilePath: services/perframe/Dockerfile
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: PERFRAME_CORS_ALLOWED_ORIGINS
+        value: "*"
+      - key: PERFRAME_JOBS_DIR
+        value: "/tmp/perframe_jobs"

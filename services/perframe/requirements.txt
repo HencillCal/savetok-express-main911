@@ -1,0 +1,5 @@
+fastapi>=0.95
+uvicorn[standard]>=0.22
+python-multipart
+rembg[cli]
+httpx>=0.24

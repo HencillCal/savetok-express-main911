@@ -16,8 +16,17 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const { file_b64, filename, content_type } = body ?? {};
 
-    if (!file_b64 || !filename || !content_type) {
-      return json({ error: "Missing file_b64, filename, or content_type" }, 400);
+    if (!file_b64 || !filename) {
+      return json({ error: "Missing file_b64 or filename" }, 400);
+    }
+
+    // Normalize / derive a safe content type. Some clients omit or misreport GIF MIME types.
+    let contentType = String(content_type ?? "");
+    if (!contentType || contentType === "application/octet-stream") {
+      if (/\.gif$/i.test(String(filename))) contentType = "image/gif";
+    }
+    if (!contentType) {
+      return json({ error: "Missing content_type" }, 400);
     }
 
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
@@ -37,12 +46,12 @@ Deno.serve(async (req) => {
     }
 
     const bytes = base64ToUint8Array(String(file_b64));
-    const blob = new Blob([bytes], { type: String(content_type) });
+    const blob = new Blob([bytes], { type: contentType });
     const sanitized = filename.replace(/[^a-z0-9._-]+/gi, "-").replace(/-+/g, "-");
     const path = `background-uploads/${Date.now()}-${Math.random().toString(36).slice(2)}-${sanitized}`;
 
     const { error: uploadError } = await supabase.storage.from(bucket).upload(path, blob as unknown as File, {
-      contentType: content_type,
+      contentType,
       upsert: false,
     });
 
