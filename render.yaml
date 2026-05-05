@@ -1,9 +1,10 @@
 services:
   - type: web
     name: tiktok-downloader
-    runtime: static
-    buildCommand: npm install && npm run build
-    staticPublishPath: ./dist
+    env: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm run preview -- --port $PORT
+    plan: free
     routes:
       - type: rewrite
         source: /*
@@ -12,6 +13,11 @@ services:
       - path: /*
         name: X-Frame-Options
         value: SAMEORIGIN
+    envVars:
+      - key: VITE_PERFRAME_URL
+        value: "https://perframe-service.onrender.com"
+      - key: NODE_ENV
+        value: "production"
   - type: web
     name: perframe-service
     env: docker
