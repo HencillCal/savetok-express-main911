@@ -16,7 +16,9 @@ import { PLATFORM_CONFIGS } from "@/lib/platforms";
 
 const primaryLinks = [{ href: "/", label: "Home" }];
 
-const downloaderLinks = PLATFORM_CONFIGS.filter((platform) => platform.key !== "tinyurl");
+// Exclude `tinyurl` and `background-remover` from the Downloaders dropdown —
+// `background-remover` is shown as its own button next to the primary Download action.
+const downloaderLinks = PLATFORM_CONFIGS.filter((platform) => !["tinyurl", "background-remover"].includes(platform.key));
 
 type DownloaderMenuProps = {
   onItemClick?: () => void;
@@ -145,6 +147,9 @@ export const Header = () => {
               <Link to="/auth">Log in</Link>
             </Button>
           )}
+          <Button asChild size="sm" variant="outline" className="mr-2">
+            <Link to="/background-remover">Background Remover</Link>
+          </Button>
           <Button asChild size="sm" className="bg-gradient-hero shadow-elegant">
             <Link to="/tiktok">Download now</Link>
           </Button>
@@ -243,11 +248,18 @@ export const Header = () => {
                       </Link>
                     </Button>
                   )}
-                  <Button asChild className="bg-gradient-hero shadow-elegant">
-                    <Link to="/tiktok" onClick={() => setOpen(false)}>
-                      Open TikTok page
-                    </Link>
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button asChild variant="outline">
+                      <Link to="/background-remover" onClick={() => setOpen(false)}>
+                        Background Remover
+                      </Link>
+                    </Button>
+                    <Button asChild className="bg-gradient-hero shadow-elegant">
+                      <Link to="/tiktok" onClick={() => setOpen(false)}>
+                        Open TikTok page
+                      </Link>
+                    </Button>
+                  </div>
                 </div>
               </div>
             </SheetContent>
