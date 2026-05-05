@@ -168,150 +168,20 @@ const BackgroundRemover = () => {
     }
     setLoading(true);
     setResult(null);
-    setLoadingLabel(file.type.startsWith("video/") ? "Extracting frame…" : "Removing background…");
+    setLoadingLabel("Removing background…");
 
     try {
-      if (file.type.startsWith("video/")) {
-        setLoadingLabel("Extracting frame & removing background…");
-        const frame = await videoFrameToJpegDataUrl(file);
-        const toSend = await downscaleDataUrl(frame, 1200).catch(() => frame);
-        const resp = await invokeWithTimeout(
-          invokePublicFunction<{ resultDataUrl?: string; error?: string }>("background-remove", {
-            image: toSend,
-          }),
-          30000,
-        );
-        if (resp?.resultDataUrl) {
-          setResult(resp.resultDataUrl);
-          toast.success("Background removed from a video frame");
-          toast.info("Uses one sampled frame, not full video matting.", { duration: 6500 });
-        } else {
-          throw new Error(resp?.error ?? "No result returned from function");
-        }
-        return;
+      const toSend = await downscaleDataUrl(preview, 1200).catch(() => preview);
+      const resp = await invokeWithTimeout(
+        invokePublicFunction<{ resultDataUrl?: string; error?: string }>("background-remove", { image: toSend }),
+        30000,
+      );
+      if (resp?.resultDataUrl) {
+        await finalizeCutout(resp.resultDataUrl);
+        toast.success("Background removed");
+      } else {
+        throw new Error(resp?.error ?? "No result returned from function");
       }
-
-      // Images + GIFs (including .gif files with missing/wrong MIME)
-      if (file.type.startsWith("image/") || shouldTreatAsGif(file, preview)) {
-        if (shouldTreatAsGif(file, preview)) {
-          if (file.size > LARGE_GIF_BYTES) {
-            setLoadingLabel("Shrinking GIF (first frame)…");
-            const blobUrl = URL.createObjectURL(file);
-            try {
-              const jpeg = await rasterToJpegDataUrl(blobUrl);
-              const toSend = await downscaleDataUrl(jpeg, 1200).catch(() => jpeg);
-              toast.info("Large GIF: using the first frame only so the file fits upload limits.", { duration: 6500 });
-              const resp = await invokeWithTimeout(
-                invokePublicFunction<{ resultDataUrl?: string; error?: string }>("background-remove", {
-                  image: toSend,
-                }),
-                30000,
-              );
-              if (resp?.resultDataUrl) {
-                await finalizeCutout(resp.resultDataUrl);
-                toast.success("Transparent GIF ready");
-              } else {
-                throw new Error(resp?.error ?? "No result returned from function");
-              }
-            } finally {
-              URL.revokeObjectURL(blobUrl);
-            }
-            return;
-          }
-
-          const buffer = await file.arrayBuffer();
-          let binary = "";
-          const bytes = new Uint8Array(buffer);
-          for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-          const file_b64 = btoa(binary);
-
-          // Prefer local per-frame service for animated GIFs when available.
-          try {
-            setLoadingLabel("Scheduling per-frame job…");
-            const form = new FormData();
-            form.append("file", file, file.name);
-            form.append("output", "gif");
-            form.append("fps", "15");
-            form.append("async_job", "1");
-
-            const base = PERFRAME_URL.replace(/\/$/, "");
-            const svcResp = await fetch(`${base}/process`, { method: "POST", body: form });
-            if (!svcResp.ok) throw new Error(`Per-frame service ${svcResp.status}`);
-            const json = await svcResp.json();
-            const statusUrl = json.status_url;
-            const resultUrl = json.result_url;
-            if (!statusUrl || !resultUrl) throw new Error("Invalid per-frame response");
-
-            setLoadingLabel("Processing GIF (this may take a while)…");
-            // Poll for job completion (2 minute timeout)
-            let meta: any = null;
-            const maxPoll = 120;
-            for (let i = 0; i < maxPoll; i++) {
-              const s = await fetch(statusUrl);
-              if (!s.ok) throw new Error("Job status fetch failed");
-              meta = await s.json();
-              if (meta.status === "done") break;
-              if (meta.status === "error") throw new Error(meta.error || "Per-frame job failed");
-              await sleep(1000);
-            }
-            if (!meta || meta.status !== "done") throw new Error("Per-frame job timed out");
-
-            setLoadingLabel("Downloading result…");
-            const fileResp = await fetch(resultUrl);
-            if (!fileResp.ok) throw new Error("Failed to download result");
-            const blob = await fileResp.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            blobPreviewRef.current = blobUrl;
-            setResult(blobUrl);
-            toast.success("Transparent GIF ready");
-            return;
-          } catch (e) {
-            // Fall back to previous upload+function path on any error
-            console.warn("Per-frame service failed, falling back:", e);
-          }
-
-          // Fallback: upload whole GIF and call Edge Function (single-frame or remove.bg)
-          const uploadResp = await invokeWithTimeout(
-            invokePublicFunction<{ fileUrl?: string }>("background-upload", {
-              file_b64,
-              filename: file.name,
-              content_type: file.type || "image/gif",
-            }),
-            30000,
-          );
-          if (!uploadResp?.fileUrl) throw new Error("Upload failed");
-
-          const resp = await invokeWithTimeout(
-            invokePublicFunction<{ resultDataUrl?: string; error?: string }>("background-remove", {
-              image_url: uploadResp.fileUrl,
-            }),
-            30000,
-          );
-          if (resp?.resultDataUrl) {
-            await finalizeCutout(resp.resultDataUrl);
-            toast.success("Transparent GIF ready");
-          } else {
-            throw new Error(resp?.error ?? "No result returned from function");
-          }
-          return;
-        }
-
-        const toSend = await downscaleDataUrl(preview, 1200).catch(() => preview);
-        const resp = await invokeWithTimeout(
-          invokePublicFunction<{ resultDataUrl?: string }>("background-remove", { image: toSend }),
-          30000,
-        );
-        if (resp?.resultDataUrl) {
-          await finalizeCutout(resp.resultDataUrl);
-          toast.success("Background removed");
-        } else {
-          throw new Error("No result returned from function");
-        }
-        return;
-      }
-
-      // Fallback
-      throw new Error("Unsupported file type");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Background removal failed";
       toast.error(msg);
@@ -396,10 +266,10 @@ const BackgroundRemover = () => {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*,video/*"
+                  accept="image/*"
                   onChange={onFileChange}
                   className="sr-only"
-                  aria-label="Upload image or video"
+                  aria-label="Upload image"
                   id="background-remover-file"
                 />
                 <div className="pointer-events-none absolute inset-0 rounded-xl bg-gradient-to-b from-background/40 to-transparent" aria-hidden />
@@ -407,12 +277,12 @@ const BackgroundRemover = () => {
                   <div className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-card text-primary shadow-soft">
                     <Upload className="h-6 w-6" aria-hidden />
                   </div>
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold tracking-tight sm:text-base">Drop an image here</p>
-                    <p className="text-xs text-muted-foreground sm:text-sm">
-                      or choose a file — PNG, JPG, GIF, WebP, and video uploads supported.
-                    </p>
-                  </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold tracking-tight sm:text-base">Drop an image here</p>
+                      <p className="text-xs text-muted-foreground sm:text-sm">
+                        or choose a file — PNG, JPG, and WebP uploads supported.
+                      </p>
+                    </div>
                   <span
                     className={cn(
                       buttonVariants({ variant: "outline", size: "lg" }),
@@ -446,15 +316,11 @@ const BackgroundRemover = () => {
                       </div>
                       <div className="relative flex min-h-[200px] flex-1 flex-col rounded-xl border border-border/80 bg-muted/15 p-2.5 sm:min-h-[256px] sm:p-3">
                         <div className="flex flex-1 items-center justify-center overflow-hidden rounded-lg bg-background/40">
-                          {fileType && fileType.startsWith("video/") ? (
-                            <video src={preview} controls className="max-h-64 w-full rounded-md object-contain shadow-sm" />
-                          ) : (
-                            <img
-                              src={preview}
-                              alt="Original upload preview"
-                              className="max-h-64 w-full object-contain object-center"
-                            />
-                          )}
+                          <img
+                            src={preview}
+                            alt="Original upload preview"
+                            className="max-h-64 w-full object-contain object-center"
+                          />
                         </div>
 
                         {loading && (
@@ -471,85 +337,33 @@ const BackgroundRemover = () => {
                     <div className="flex min-h-0 flex-col">
                       <div className="mb-2 flex items-baseline justify-between gap-2">
                         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Result</h2>
-                        <span className="text-[11px] text-muted-foreground">
-                          {sourceIsGif
-                            ? "Transparent GIF when ready"
-                            : fileType?.startsWith("video/")
-                              ? resultShowsCheckerboard
-                                ? "Frame cutout (PNG)"
-                                : "One frame → cutout"
-                              : "Transparent PNG when ready"}
-                        </span>
+                        <span className="text-[11px] text-muted-foreground">Transparent PNG when ready</span>
                       </div>
                       <div
                         className={cn(
                           "relative flex min-h-[200px] flex-1 flex-col rounded-xl border border-border/80 p-2.5 sm:min-h-[256px] sm:p-3",
-                          result && resultShowsCheckerboard
-                            ? "bg-[length:14px_14px] [background-image:linear-gradient(45deg,#88888814_25%,transparent_25%),linear-gradient(-45deg,#88888814_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#88888814_75%),linear-gradient(-45deg,transparent_75%,#88888814_75%)] [background-position:0_0,0_7px,7px_-7px,-7px_0]"
-                            : "bg-muted/15",
+                          result ? "bg-[length:14px_14px] [background-image:linear-gradient(45deg,#88888814_25%,transparent_25%),linear-gradient(-45deg,#88888814_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#88888814_75%),linear-gradient(-45deg,transparent_75%,#88888814_75%)] [background-position:0_0,0_7px,7px_-7px,-7px_0]" : "bg-muted/15",
                         )}
                       >
-                        <div
-                          className={cn(
-                            "flex flex-1 items-center justify-center overflow-hidden rounded-lg",
-                            result && resultShowsCheckerboard ? "bg-transparent" : "bg-background/40",
-                          )}
-                        >
+                        <div className={cn("flex flex-1 items-center justify-center overflow-hidden rounded-lg", result ? "bg-transparent" : "bg-background/40")}>
                           {result ? (
-                            resultShowsCheckerboard ? (
-                              <img
-                                src={result}
-                                alt="Background removed"
-                                className="max-h-64 w-full object-contain object-center drop-shadow-md"
-                              />
-                            ) : (
-                              <video src={result} controls className="max-h-64 w-full rounded-md object-contain shadow-sm" />
-                            )
+                            <img src={result} alt="Background removed" className="max-h-64 w-full object-contain object-center drop-shadow-md" />
                           ) : (
                             <div className="flex flex-col items-center justify-center px-4 py-6 text-center text-muted-foreground">
                               <div className="mb-2 inline-flex rounded-full bg-muted/80 p-3">
                                 <ImageIcon className="h-7 w-7 opacity-80" />
                               </div>
                               <p className="text-sm font-medium text-foreground/90">No result yet</p>
-                              <p className="mt-1 max-w-[240px] text-xs leading-relaxed">
-                                {fileType?.startsWith("video/")
-                                  ? "Click Remove background to cut out one frame from your video."
-                                  : "Run remove background to see your cutout beside the original."}
-                              </p>
+                              <p className="mt-1 max-w-[240px] text-xs leading-relaxed">Run remove background to see your cutout beside the original.</p>
                             </div>
                           )}
                         </div>
 
-                        {result && fileType?.startsWith("video/") && !resultShowsCheckerboard && (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <a href={result} target="_blank" rel="noreferrer" className="inline-block">
-                              <Button size="sm" className="bg-gradient-hero">
-                                <Download className="h-4 w-4" />
-                                Open / Download
-                              </Button>
-                            </a>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                try {
-                                  navigator.clipboard.writeText(result);
-                                  toast.success("Copied URL");
-                                } catch {
-                                  toast.error("Could not copy");
-                                }
-                              }}
-                            >
-                              Copy URL
-                            </Button>
-                          </div>
-                        )}
-
-                        {result && resultShowsCheckerboard && (
+                        {result && (
                           <div className="mt-3 flex flex-wrap gap-2">
                             <Button onClick={downloadResult} size="sm" className="bg-gradient-hero">
                               <Download className="h-4 w-4" />
-                              {result.startsWith("data:image/gif") ? "Download GIF" : "Download PNG"}
+                              Download
                             </Button>
                             <Button
                               size="sm"
