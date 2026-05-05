@@ -1,0 +1,8 @@
+app = "udemy-scraper"
+
+[build]
+  image = "dockerfile"
+
+[env]
+  # Enable Playwright by default in deployed environments (can be disabled)
+  USE_PLAYWRIGHT = "1"

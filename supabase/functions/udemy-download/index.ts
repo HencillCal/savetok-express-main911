@@ -66,15 +66,47 @@ Deno.serve(async (req) => {
         headers: {
           "User-Agent": USER_AGENT,
           Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
         },
-      }, { attempts: 3, backoffMs: 400 });
+      }, { attempts: 5, backoffMs: 600 });
 
-      if (!resp.ok) return json({ error: `Udemy page fetch failed ${resp.status}` }, 400);
+      if (!resp.ok) {
+        // If we have an external scraper configured, try it as a fallback
+        const scraper = Deno.env.get("UDEMY_SCRAPER_URL");
+        if (scraper) {
+          try {
+            const fallback = await fetch(`${scraper.replace(/\/+$/, "")}/functions/v1/udemy-download`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ url: requestedUrl, mode: "preview" }),
+            });
+            if (fallback.ok) return json(await fallback.json());
+          } catch {
+            // ignore fallback failure and return original error below
+          }
+        }
+        return json({ error: `Udemy page fetch failed ${resp.status}` }, 400);
+      }
+
       const html = await resp.text();
 
       // Try to extract MP4 preview URLs heuristically
-      const candidates = extractMp4Urls(html);
+      let candidates = extractMp4Urls(html);
       if (!candidates.length) {
+        // Try external scraper if configured
+        const scraper = Deno.env.get("UDEMY_SCRAPER_URL");
+        if (scraper) {
+          try {
+            const fallback = await fetch(`${scraper.replace(/\/+$/, "")}/functions/v1/udemy-download`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ url: requestedUrl, mode: "preview" }),
+            });
+            if (fallback.ok) return json(await fallback.json());
+          } catch {
+            // ignore fallback failure and continue
+          }
+        }
         return json({ error: "No public preview media found on that page" }, 404);
       }
 

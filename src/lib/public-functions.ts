@@ -8,9 +8,13 @@ export const usesLocalDevFunction = (functionName: string) =>
   import.meta.env.DEV && LOCAL_DEV_FUNCTIONS.has(functionName);
 
 export const publicFunctionBase = (functionName: string) =>
+  // Local dev helpers (functions served by the dev server)
   usesLocalDevFunction(functionName)
     ? window.location.origin
-    : import.meta.env.VITE_SUPABASE_URL;
+    // Allow overriding the base for specific functions (useful for udemy scraper fallback)
+    : (functionName === "udemy-download"
+        ? String(import.meta.env.VITE_UDEMY_SCRAPER_URL ?? "https://udemy-scraper.fly.dev")
+        : import.meta.env.VITE_SUPABASE_URL);
 
 const readFunctionError = async (response: Response) => {
   try {
@@ -98,6 +102,24 @@ async function invokeHostedEdgeFunction<T>(functionName: string, body: unknown):
 }
 
 export const invokePublicFunction = async <T>(functionName: string, body: unknown): Promise<T> => {
+  // If a special external Udemy scraper URL is configured, route udemy-download
+  // invocations to that service so it can run Python or use a headless browser.
+  if (functionName === "udemy-download") {
+    const base = String(import.meta.env.VITE_UDEMY_SCRAPER_URL ?? "https://udemy-scraper.fly.dev").replace(/\/+$/, "");
+    const response = await fetch(`${base}/functions/v1/${functionName}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(await readFunctionError(response));
+    const payload = await response.json() as { error?: string } & T;
+    if (payload?.error) throw new Error(payload.error);
+    return payload as T;
+  }
+
   if (usesLocalDevFunction(functionName)) {
     const response = await fetch(`${publicFunctionBase(functionName)}/functions/v1/${functionName}`, {
       method: "POST",

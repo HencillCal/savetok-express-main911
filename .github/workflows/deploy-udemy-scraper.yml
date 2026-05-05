@@ -1,0 +1,66 @@
+name: Deploy udemy-scraper and update Vercel env
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-udemy-scraper:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Fly (if configured)
+        if: ${{ secrets.FLY_API_TOKEN != '' }}
+        uses: superfly/flyctl-actions@1.1
+        with:
+          args: deploy --config services/udemy-scraper/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Parse Fly app name
+        id: fly_app
+        run: |
+          if [ -f services/udemy-scraper/fly.toml ]; then
+            APP=$(sed -n 's/^app *= *"\(.*\)"/\1/p' services/udemy-scraper/fly.toml)
+            echo "app=$APP" >> $GITHUB_OUTPUT
+          else
+            echo "app=" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Update Vercel env VITE_UDEMY_SCRAPER_URL (if configured)
+        if: ${{ secrets.VERCEL_TOKEN != '' && steps.fly_app.outputs.app != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -e
+          APP=${{ steps.fly_app.outputs.app }}
+          SCRAPER_URL="https://${APP}.fly.dev"
+          echo "Setting VITE_UDEMY_SCRAPER_URL=$SCRAPER_URL on project $VERCEL_PROJECT_ID"
+
+          EXISTING=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/env" | jq -r '.env[]? | select(.key=="VITE_UDEMY_SCRAPER_URL") | .id // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing Vercel env var"
+            curl -s -X PATCH "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/env/$EXISTING" \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"value\":\"$SCRAPER_URL\",\"target\":[\"preview\",\"production\"]}"
+          else
+            echo "Creating Vercel env var"
+            curl -s -X POST "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/env" \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"key\":\"VITE_UDEMY_SCRAPER_URL\",\"value\":\"$SCRAPER_URL\",\"target\":[\"preview\",\"production\"]}"
+          fi
+
+      - name: Success message
+        run: |
+          echo "Deploy workflow finished. If Fly and Vercel secrets were provided, udemy-scraper should be deployed and Vercel env updated."
+        shell: bash

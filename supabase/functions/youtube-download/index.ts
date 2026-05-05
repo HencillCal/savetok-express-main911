@@ -17,11 +17,18 @@ const ALLOWED_DOWNLOAD_HOSTS = [
   "ggpht.com",
 ] as const;
 
-const INVIDIOUS_BASES = [
+const DEFAULT_INVIDIOUS_BASES = [
   "https://yewtu.be/api/v1",
   "https://inv.nadeko.net/api/v1",
   "https://vid.puffyan.us/api/v1",
-] as const;
+  "https://yewtu.eu/api/v1",
+  "https://yewtu.cafe/api/v1",
+  "https://yewtu.org/api/v1",
+];
+
+const INVIDIOUS_BASES: string[] = Deno.env.get("INVIDIOUS_BASES")
+  ? (Deno.env.get("INVIDIOUS_BASES") || "").split(",").map((s) => s.trim()).filter(Boolean)
+  : DEFAULT_INVIDIOUS_BASES.slice();
 
 const ANDROID_CLIENT_VERSION = "20.10.38";
 const ANDROID_USER_AGENT =
@@ -423,10 +430,49 @@ Deno.serve(async (req) => {
         return json({ error: "Please enter a valid YouTube playlist URL" }, 400);
       }
 
-      const playlist = await fetchFromInvidious<InvidiousPlaylist>(`/playlists/${playlistId}`);
-      const videos = playlist.videos ?? [];
+      // Try Invidious first, but fall back to scraping the playlist page if Invidious
+      // instances are unavailable or rate-limited.
+      let videos: Array<{ videoId?: string; title?: string; videoThumbnails?: Thumbnail[] }> = [];
+      let playlistMeta: InvidiousPlaylist | null = null;
+      try {
+        const playlist = await fetchFromInvidious<InvidiousPlaylist>(`/playlists/${playlistId}`);
+        playlistMeta = playlist;
+        videos = playlist.videos ?? [];
+      } catch (err) {
+        // Fallback: fetch the playlist page HTML and extract video IDs from the page JSON
+        try {
+          const playlistUrl = `https://www.youtube.com/playlist?list=${encodeURIComponent(playlistId)}`;
+          const resp = await fetchWithRetry(playlistUrl, {
+            headers: {
+              "User-Agent": USER_AGENT,
+              Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+          }, { attempts: 3, backoffMs: 500 });
+
+          if (resp.ok) {
+            const html = await resp.text();
+            const ids: string[] = [];
+            const re = /"videoId":"([A-Za-z0-9_-]{11})"/g;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(html)) && ids.length < 200) {
+              const id = m[1];
+              if (!ids.includes(id)) ids.push(id);
+            }
+            videos = ids.map((id) => ({ videoId: id }));
+            playlistMeta = { title: null, author: null, description: null, videos };
+          } else {
+            throw err;
+          }
+        } catch (err2) {
+          // Re-throw original Invidious error if fallback also failed
+          const message = err instanceof Error ? err.message : String(err);
+          return json({ error: message }, 502);
+        }
+      }
+
       const settled = await Promise.allSettled(
-        videos.map(async (entry) => {
+        (videos ?? []).map(async (entry) => {
           if (!entry.videoId) return null;
           const payload = await fetchFromInnertube(entry.videoId);
           return makeVideoItem(entry.videoId, toYouTubeVideo(payload), "video");
@@ -444,10 +490,10 @@ Deno.serve(async (req) => {
       return json({
         platform: "youtube",
         sourceType: "playlist",
-        title: playlist.title ?? "YouTube playlist",
-        caption: playlist.description ?? null,
-        username: playlist.authorId ?? null,
-        authorName: playlist.author ?? null,
+        title: playlistMeta?.title ?? "YouTube playlist",
+        caption: playlistMeta?.description ?? null,
+        username: playlistMeta?.authorId ?? null,
+        authorName: playlistMeta?.author ?? null,
         profilePic: null,
         cover: items[0]?.thumbnail ?? null,
         items,
@@ -460,8 +506,35 @@ Deno.serve(async (req) => {
       return json({ error: "Please enter a valid YouTube video, Shorts, or music URL" }, 400);
     }
 
-    const payload = await fetchFromInnertube(videoId);
-    const video = toYouTubeVideo(payload);
+    let payload: PlayerResponse | null = null;
+    try {
+      payload = await fetchFromInnertube(videoId);
+    } catch (innertubeErr) {
+      // If Innertube fails (sometimes for Shorts or restricted content), try Invidious video endpoint as a fallback.
+      try {
+        const inv = await fetchFromInvidious<any>(`/videos/${videoId}`);
+        // Map Invidious response shape to PlayerResponse-ish object for downstream helpers.
+        const mapped: PlayerResponse = {
+          videoDetails: {
+            title: inv.title ?? inv.videoTitle ?? undefined,
+            author: inv.author ?? undefined,
+            channelId: inv.authorId ?? undefined,
+            shortDescription: inv.description ?? undefined,
+            thumbnail: { thumbnails: inv.videoThumbnails ?? inv.thumbnails ?? [] },
+          },
+          streamingData: {
+            formats: (inv.formatStreams ?? inv.format ?? inv.formats ?? []) as StreamFormat[],
+            adaptiveFormats: (inv.adaptiveFormats ?? inv.adaptiveFormats ?? []) as StreamFormat[],
+          },
+        } as PlayerResponse;
+        payload = mapped;
+      } catch (invErr) {
+        // rethrow the original Innertube error if fallback also fails
+        throw innertubeErr;
+      }
+    }
+
+    const video = toYouTubeVideo(payload as PlayerResponse);
     const item = makeVideoItem(videoId, video, requestedMode);
     if (!item.downloads.length) {
       return json({ error: "No downloadable streams were found for that video" }, 404);
