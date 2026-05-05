@@ -150,9 +150,6 @@ export const Header = () => {
           <Button asChild size="sm" variant="outline" className="mr-2">
             <Link to="/background-remover">Background Remover</Link>
           </Button>
-          <Button asChild size="sm" className="bg-gradient-hero shadow-elegant">
-            <Link to="/tiktok">Download now</Link>
-          </Button>
         </div>
 
         <div className="flex items-center gap-1 md:hidden">
@@ -252,11 +249,6 @@ export const Header = () => {
                     <Button asChild variant="outline">
                       <Link to="/background-remover" onClick={() => setOpen(false)}>
                         Background Remover
-                      </Link>
-                    </Button>
-                    <Button asChild className="bg-gradient-hero shadow-elegant">
-                      <Link to="/tiktok" onClick={() => setOpen(false)}>
-                        Open TikTok page
                       </Link>
                     </Button>
                   </div>
