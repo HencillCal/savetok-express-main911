@@ -5,6 +5,7 @@ export type PlatformKey =
   | "youtube"
   | "twitter"
   | "linkedin"
+  | "udemy"
   | "tinyurl"
   | "background-remover";
 

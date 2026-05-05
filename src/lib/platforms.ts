@@ -8,6 +8,7 @@ import {
   Play,
   Twitter,
   Youtube,
+  Book,
 } from "lucide-react";
 import type { PlatformKey } from "@/lib/media";
 
@@ -47,6 +48,13 @@ export const PLATFORM_CONFIGS: PlatformConfig[] = [
     route: "/youtube",
     blurb: "Videos, Shorts, audio, playlists, and thumbnails.",
     icon: Youtube,
+  },
+  {
+    key: "udemy",
+    name: "Udemy",
+    route: "/udemy",
+    blurb: "Preview lectures and course assets.",
+    icon: Book,
   },
   {
     key: "twitter",

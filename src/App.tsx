@@ -11,6 +11,7 @@ import TikTok from "./pages/TikTok.tsx";
 import Instagram from "./pages/Instagram.tsx";
 import Facebook from "./pages/Facebook.tsx";
 import YouTube from "./pages/YouTube.tsx";
+import Udemy from "./pages/Udemy.tsx";
 import Twitter from "./pages/Twitter.tsx";
 import LinkedIn from "./pages/LinkedIn.tsx";
 import TinyUrl from "./pages/TinyUrl.tsx";
@@ -32,6 +33,7 @@ const App = () => (
           <Route path="/instagram" element={<Instagram />} />
           <Route path="/facebook" element={<Facebook />} />
           <Route path="/youtube" element={<YouTube />} />
+          <Route path="/udemy" element={<Udemy />} />
           <Route path="/twitter" element={<Twitter />} />
           <Route path="/linkedin" element={<LinkedIn />} />
           <Route path="/tinyurl" element={<TinyUrl />} />
