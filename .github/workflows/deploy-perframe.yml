@@ -1,0 +1,66 @@
+name: Deploy perframe and update Vercel env
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-perframe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Fly (if configured)
+        if: ${{ secrets.FLY_API_TOKEN != '' }}
+        uses: superfly/flyctl-actions@1.1
+        with:
+          args: deploy --config services/perframe/fly.toml --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Parse Fly app name
+        id: fly_app
+        run: |
+          if [ -f services/perframe/fly.toml ]; then
+            APP=$(sed -n 's/^app *= *"\(.*\)"/\1/p' services/perframe/fly.toml)
+            echo "app=$APP" >> $GITHUB_OUTPUT
+          else
+            echo "app=" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Update Vercel env VITE_PERFRAME_URL (if configured)
+        if: ${{ secrets.VERCEL_TOKEN != '' && steps.fly_app.outputs.app != '' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -e
+          APP=${{ steps.fly_app.outputs.app }}
+          PERFRAME_URL="https://${APP}.fly.dev"
+          echo "Setting VITE_PERFRAME_URL=$PERFRAME_URL on project $VERCEL_PROJECT_ID"
+
+          EXISTING=$(curl -s -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/env" | jq -r '.env[]? | select(.key=="VITE_PERFRAME_URL") | .id // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing Vercel env var"
+            curl -s -X PATCH "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/env/$EXISTING" \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"value\":\"$PERFRAME_URL\",\"target\":[\"preview\",\"production\"]}"
+          else
+            echo "Creating Vercel env var"
+            curl -s -X POST "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/env" \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"key\":\"VITE_PERFRAME_URL\",\"value\":\"$PERFRAME_URL\",\"target\":[\"preview\",\"production\"]}"
+          fi
+
+      - name: Success message
+        run: |
+          echo "Deploy workflow finished. If Fly and Vercel secrets were provided, perframe should be deployed and VERCEL env updated."
+        shell: bash

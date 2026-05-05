@@ -1,4 +1,4 @@
-import { useState, useRef, type ChangeEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useState, useRef, useEffect, type ChangeEvent, type DragEvent, type KeyboardEvent } from "react";
 import { Image as ImageIcon, Loader2, Download, Trash2, Upload } from "lucide-react";
 import { PageShell } from "@/components/site/PageShell";
 import { PlatformRouteLinks } from "@/components/site/PlatformRouteLinks";
@@ -204,13 +204,20 @@ const BackgroundRemover = () => {
   const [perframeUrl, setPerframeUrl] = useState<string>(() => {
     try {
       const saved = localStorage.getItem("perframe_url");
-      return saved || _envPerframe || "";
+      const builtin = typeof window !== "undefined" && window.location?.origin
+        ? `${window.location.origin.replace(/\/$/, "")}/perframe`
+        : "";
+      return saved || _envPerframe || builtin || "";
     } catch {
       return _envPerframe || "";
     }
   });
 
-  const PERFRAME_URL = perframeUrl || _envPerframe || "http://localhost:8000";
+  const defaultBuiltin = typeof window !== "undefined" && window.location?.origin
+    ? `${window.location.origin.replace(/\/$/, "")}/perframe`
+    : "";
+
+  const PERFRAME_URL = perframeUrl || _envPerframe || defaultBuiltin || "http://localhost:8000";
 
   const savePerframeUrl = (u: string) => {
     try {
@@ -240,12 +247,25 @@ const BackgroundRemover = () => {
   };
 
   const autoDetectPerframe = async () => {
+    const origin = typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : "";
+    const host = typeof window !== "undefined" ? window.location.hostname.split(":")[0] : "";
+    const scheme = typeof window !== "undefined" ? window.location.protocol : "https:";
+    const builtin = origin ? `${origin}/perframe` : "";
+
     const candidates = [
       _envPerframe,
+      builtin,
+      // common derived patterns to try automatically so no manual config is required
+      host ? `${scheme}//perframe.${host}` : "",
+      host ? `${scheme}//perframe-${host}` : "",
+      host ? `${scheme}//${host.replace(/\./g, "-")}-perframe` : "",
+      // provider fallbacks that sometimes host sibling apps
+      host ? `https://${host}-perframe.vercel.app` : "",
+      host ? `https://perframe-${host}.vercel.app` : "",
+      host ? `https://perframe-${host}.fly.dev` : "",
       "http://localhost:8000",
-      "https://perframe-service.onrender.com",
-      "https://perframe-app.fly.dev",
     ].filter(Boolean) as string[];
+
     setLoading(true);
     setLoadingLabel("Detecting per-frame service…");
     for (const c of candidates) {
@@ -258,8 +278,21 @@ const BackgroundRemover = () => {
       }
     }
     setLoading(false);
-    toast.error("Could not detect per-frame service automatically");
+    // do not spam the user with errors on initial load; only show if explicit action requested
   };
+
+  // Auto-run detection on first load if no explicit env or saved URL
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("perframe_url");
+      if (!saved && !_envPerframe) {
+        void autoDetectPerframe();
+      }
+    } catch (e) {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
@@ -674,28 +707,6 @@ const BackgroundRemover = () => {
                   </div>
 
                   <div className="mt-5 flex flex-col items-stretch gap-3 border-t border-border/60 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="mb-2 w-full sm:w-[50%]">
-                      <label className="text-xs font-medium text-muted-foreground">Per-frame service URL (optional)</label>
-                      <div className="mt-1 flex gap-2">
-                        <input
-                          type="text"
-                          value={perframeUrl}
-                          onChange={(e) => setPerframeUrl(e.target.value)}
-                          placeholder={_envPerframe || "http://localhost:8000"}
-                          className="flex-1 rounded-md border border-border px-3 py-1 text-sm bg-background"
-                        />
-                        <Button size="sm" onClick={() => autoDetectPerframe()} disabled={loading}>
-                          Detect
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => savePerframeUrl(perframeUrl)}>
-                          Save
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => { savePerframeUrl(""); setPerframeUrl(""); }}>
-                          Reset
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">Set your per-frame backend URL here so GIFs are preserved. If empty, the app will try localhost or fall back to remove.bg.</p>
-                    </div>
                     <p className="text-center text-xs text-muted-foreground sm:text-left">
                       Images are processed securely. Clear resets this session.
                     </p>
