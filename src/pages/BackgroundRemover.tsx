@@ -1,19 +1,11 @@
-import { useState, useRef, useEffect, type ChangeEvent, type DragEvent, type KeyboardEvent } from "react";
+import { useState, useRef, type ChangeEvent, type DragEvent, type KeyboardEvent } from "react";
 import { Image as ImageIcon, Loader2, Download, Trash2, Upload } from "lucide-react";
 import { PageShell } from "@/components/site/PageShell";
 import { PlatformRouteLinks } from "@/components/site/PlatformRouteLinks";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import {
-  LARGE_GIF_BYTES,
-  MAX_GIF_UPLOAD_BYTES,
-  isRasterCutoutDataUrl,
-  pngDataUrlToTransparentGifDataUrl,
-  rasterToJpegDataUrl,
-  shouldTreatAsGif,
-  videoFrameToJpegDataUrl,
-} from "@/lib/background-preprocess";
+// GIF and video background removal disabled — keep only standard image flow.
 import { invokePublicFunction } from "@/lib/public-functions";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +17,6 @@ const BackgroundRemover = () => {
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("Removing background…");
   const [isDragging, setIsDragging] = useState(false);
-  const [sourceIsGif, setSourceIsGif] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const blobPreviewRef = useRef<string | null>(null);
@@ -71,41 +62,31 @@ const BackgroundRemover = () => {
   const applyFile = (f: File) => {
     const isVideo = f.type ? f.type.startsWith("video/") : false;
     const isImageMime = f.type ? f.type.startsWith("image/") : false;
-    const gifByName = /\.gif$/i.test(f.name);
-    const hasKnownImageExt = /\.(gif|png|jpe?g|webp|bmp|tiff)$/i.test(f.name);
-    if (!isVideo && !isImageMime && !hasKnownImageExt) {
-      toast.error("Please select an image or video file");
+    const gifByName = /\.gif$/i.test(f.name) || f.type === "image/gif";
+    const hasKnownImageExt = /\.(png|jpe?g|webp|bmp|tiff)$/i.test(f.name);
+
+    if (isVideo) {
+      toast.error("Video files are not supported");
       return;
     }
 
-    const isGif = shouldTreatAsGif(f, null);
-    setSourceIsGif(isGif);
-
-    let fileToUse = f;
-    if (isGif && f.size > MAX_GIF_UPLOAD_BYTES) {
-      fileToUse = new File([f.slice(0, MAX_GIF_UPLOAD_BYTES)], f.name, {
-        type: f.type || "image/gif",
-        lastModified: f.lastModified,
-      });
-      toast.info(`Using only the first ${MAX_GIF_UPLOAD_BYTES / (1024 * 1024)} MB of this GIF.`, { duration: 6500 });
+    if (gifByName) {
+      toast.error("Animated GIFs are not supported");
+      return;
     }
 
-    setFile(fileToUse);
-
-    if (isVideo) {
-      setSourceIsGif(false);
-      revokeBlobPreview();
-      const url = URL.createObjectURL(fileToUse);
-      blobPreviewRef.current = url;
-      setPreview(url);
-    } else {
-      revokeBlobPreview();
-      const reader = new FileReader();
-      reader.onload = () => setPreview(reader.result as string);
-      reader.readAsDataURL(fileToUse);
+    if (!isImageMime && !hasKnownImageExt) {
+      toast.error("Please select an image file (PNG/JPG/WebP/BMP/TIFF)");
+      return;
     }
 
-    setFileType(fileToUse.type || (gifByName ? "image/gif" : fileToUse.type));
+    setFile(f);
+    revokeBlobPreview();
+    const reader = new FileReader();
+    reader.onload = () => setPreview(reader.result as string);
+    reader.readAsDataURL(f);
+
+    setFileType(f.type || "image/png");
     setResult(null);
   };
 
@@ -115,7 +96,6 @@ const BackgroundRemover = () => {
       setFile(null);
       setPreview(null);
       setFileType(null);
-      setSourceIsGif(false);
       revokeBlobPreview();
       return;
     }
@@ -161,35 +141,12 @@ const BackgroundRemover = () => {
     setPreview(null);
     setResult(null);
     setFileType(null);
-    setSourceIsGif(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const finalizeCutout = async (cutoutDataUrl: string) => {
-    let out = cutoutDataUrl;
-    const wantsGif =
-      sourceIsGif || Boolean(file && preview && shouldTreatAsGif(file, preview));
-    if (wantsGif && isRasterCutoutDataUrl(cutoutDataUrl)) {
-      try {
-        setLoadingLabel("Encoding transparent GIF…");
-        // Try encoding, but don't block indefinitely — fall back to PNG after timeout.
-        const encodePromise = pngDataUrlToTransparentGifDataUrl(cutoutDataUrl);
-        out = await Promise.race([
-          encodePromise,
-          new Promise<string>((resolve) => setTimeout(() => resolve(cutoutDataUrl), 8000)),
-        ]);
-        if (out === cutoutDataUrl) {
-          toast.info("GIF encoding timed out — showing PNG instead.", { duration: 5000 });
-        }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "GIF encoding failed";
-        console.error("GIF encoding error:", e);
-        toast.error(msg);
-        toast.info("Showing PNG cutout instead.", { duration: 5000 });
-        out = cutoutDataUrl;
-      }
-    }
-    setResult(out);
+    // GIFs and video frames disabled — always show PNG/WebP cutout returned by the API.
+    setResult(cutoutDataUrl);
   };
 
   // Wrap Edge Function calls with a timeout to avoid hanging the UI if functions stall.
@@ -200,99 +157,7 @@ const BackgroundRemover = () => {
     ]);
   };
 
-  const _envPerframe = (import.meta.env.VITE_PERFRAME_URL as string) || "";
-  const [perframeUrl, setPerframeUrl] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem("perframe_url");
-      const builtin = typeof window !== "undefined" && window.location?.origin
-        ? `${window.location.origin.replace(/\/$/, "")}/perframe`
-        : "";
-      return saved || _envPerframe || builtin || "";
-    } catch {
-      return _envPerframe || "";
-    }
-  });
-
-  const defaultBuiltin = typeof window !== "undefined" && window.location?.origin
-    ? `${window.location.origin.replace(/\/$/, "")}/perframe`
-    : "";
-
-  const PERFRAME_URL = perframeUrl || _envPerframe || defaultBuiltin || "http://localhost:8000";
-
-  const savePerframeUrl = (u: string) => {
-    try {
-      if (u) localStorage.setItem("perframe_url", u);
-      else localStorage.removeItem("perframe_url");
-      setPerframeUrl(u);
-      toast.success("Per-frame URL saved locally");
-    } catch (e) {
-      toast.error("Could not save per-frame URL locally");
-    }
-  };
-
-  const probeHealth = async (base: string, ms = 2500) => {
-    if (!base) return false;
-    const url = base.replace(/\/$/, "") + "/health";
-    try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), ms);
-      const res = await fetch(url, { method: "GET", signal: controller.signal });
-      clearTimeout(id);
-      if (!res.ok) return false;
-      const j = await res.json().catch(() => ({}));
-      return j && j.status === "ok";
-    } catch {
-      return false;
-    }
-  };
-
-  const autoDetectPerframe = async () => {
-    const origin = typeof window !== "undefined" ? window.location.origin.replace(/\/$/, "") : "";
-    const host = typeof window !== "undefined" ? window.location.hostname.split(":")[0] : "";
-    const scheme = typeof window !== "undefined" ? window.location.protocol : "https:";
-    const builtin = origin ? `${origin}/perframe` : "";
-
-    const candidates = [
-      _envPerframe,
-      builtin,
-      // common derived patterns to try automatically so no manual config is required
-      host ? `${scheme}//perframe.${host}` : "",
-      host ? `${scheme}//perframe-${host}` : "",
-      host ? `${scheme}//${host.replace(/\./g, "-")}-perframe` : "",
-      // provider fallbacks that sometimes host sibling apps
-      host ? `https://${host}-perframe.vercel.app` : "",
-      host ? `https://perframe-${host}.vercel.app` : "",
-      host ? `https://perframe-${host}.fly.dev` : "",
-      "http://localhost:8000",
-    ].filter(Boolean) as string[];
-
-    setLoading(true);
-    setLoadingLabel("Detecting per-frame service…");
-    for (const c of candidates) {
-      const ok = await probeHealth(c, 2500);
-      if (ok) {
-        savePerframeUrl(c.replace(/\/$/, ""));
-        setLoading(false);
-        toast.success(`Per-frame service found: ${c}`);
-        return;
-      }
-    }
-    setLoading(false);
-    // do not spam the user with errors on initial load; only show if explicit action requested
-  };
-
-  // Auto-run detection on first load if no explicit env or saved URL
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("perframe_url");
-      if (!saved && !_envPerframe) {
-        void autoDetectPerframe();
-      }
-    } catch (e) {
-      // ignore
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Per-frame and GIF/video handling removed. No auto-detection or extra hosts.
 
   const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
