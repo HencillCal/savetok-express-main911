@@ -104,8 +104,8 @@ async function invokeHostedEdgeFunction<T>(functionName: string, body: unknown):
 export const invokePublicFunction = async <T>(functionName: string, body: unknown): Promise<T> => {
   // If a special external Udemy scraper URL is configured, route udemy-download
   // invocations to that service so it can run Python or use a headless browser.
-  if (functionName === "udemy-download") {
-    const base = String(import.meta.env.VITE_UDEMY_SCRAPER_URL ?? "https://udemy-scraper.fly.dev").replace(/\/+$/, "");
+  if (functionName === "udemy-download" && import.meta.env.VITE_UDEMY_SCRAPER_URL) {
+    const base = String(import.meta.env.VITE_UDEMY_SCRAPER_URL).replace(/\/+$/, "");
     const response = await fetch(`${base}/functions/v1/${functionName}`, {
       method: "POST",
       headers: {
