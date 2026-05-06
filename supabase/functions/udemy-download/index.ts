@@ -36,7 +36,7 @@ const extractMp4Urls = (html: string) => {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
   try {
     if (req.method === "GET" || req.method === "HEAD") {

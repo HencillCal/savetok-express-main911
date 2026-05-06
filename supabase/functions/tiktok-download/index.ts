@@ -42,7 +42,7 @@ async function proxyDownload(fileUrl: string, filename: string): Promise<Respons
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   try {
