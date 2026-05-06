@@ -315,3 +315,106 @@ def udemy_download(body: dict):
             return JSONResponse(status_code=500, content={"error": str(e)})
 
     return JSONResponse(status_code=400, content={"error": "Unsupported mode"})
+
+
+def debug_playwright_session(url: str, headful: bool = True, cookies=None, timeout_ms: int = 60000):
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        return {"error": f"Playwright not available: {e}"}
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=not headful, args=["--no-sandbox"])
+            context = browser.new_context()
+
+            # Add cookies if provided
+            try:
+                norm = []
+                if cookies and isinstance(cookies, list):
+                    for c in cookies:
+                        if isinstance(c, dict) and c.get("name") and c.get("value"):
+                            norm.append({
+                                "name": c.get("name"),
+                                "value": c.get("value"),
+                                "domain": c.get("domain") or ".udemy.com",
+                                "path": c.get("path") or "/",
+                            })
+                if norm:
+                    context.add_cookies(norm)
+            except Exception as e:
+                print("Failed to set cookies:", e)
+
+            page = context.new_page(user_agent=USER_AGENT)
+
+            entries = []
+            logs = []
+
+            def on_request(req):
+                try:
+                    entries.append({
+                        "type": "request",
+                        "url": req.url,
+                        "method": req.method,
+                        "headers": dict(req.headers),
+                    })
+                except Exception:
+                    pass
+
+            def on_response(resp):
+                try:
+                    record = {
+                        "type": "response",
+                        "url": resp.url,
+                        "status": resp.status,
+                        "headers": dict(resp.headers),
+                    }
+                    ctype = (resp.headers.get("content-type") or "")
+                    if "text" in ctype or "json" in ctype or ctype == "":
+                        try:
+                            body = resp.text()
+                            record["bodySnippet"] = body[:2000]
+                        except Exception:
+                            record["bodySnippet"] = None
+                    else:
+                        record["contentLength"] = resp.headers.get("content-length")
+                    entries.append(record)
+                except Exception:
+                    pass
+
+            page.on("request", on_request)
+            page.on("response", on_response)
+            page.on("console", lambda msg: logs.append({"type": msg.type, "text": msg.text}))
+
+            try:
+                page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            except Exception as e:
+                # navigation errors are allowed; we'll still return captured traffic
+                print("Navigation warning:", e)
+
+            try:
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+            try:
+                context.close()
+                browser.close()
+            except Exception:
+                pass
+
+            return {"url": url, "entries": entries, "logs": logs}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/functions/v1/udemy-debug")
+def udemy_debug(body: dict):
+    url = body.get("url") if isinstance(body, dict) else None
+    if not url:
+        return JSONResponse(status_code=400, content={"error": "Missing url"})
+    headful = bool(body.get("headful", True))
+    timeout_ms = int(body.get("timeout", 60000))
+    cookies = body.get("cookies") if isinstance(body, dict) else None
+    result = debug_playwright_session(url, headful=headful, cookies=cookies, timeout_ms=timeout_ms)
+    return JSONResponse(content=result)

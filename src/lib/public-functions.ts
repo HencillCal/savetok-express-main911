@@ -12,8 +12,8 @@ export const publicFunctionBase = (functionName: string) =>
   usesLocalDevFunction(functionName)
     ? window.location.origin
     // Allow overriding the base for specific functions (useful for udemy scraper fallback)
-    : (functionName === "udemy-download"
-        ? String(import.meta.env.VITE_UDEMY_SCRAPER_URL ?? "https://udemy-scraper.fly.dev")
+    : (functionName === "udemy-download" && import.meta.env.VITE_UDEMY_SCRAPER_URL
+        ? String(import.meta.env.VITE_UDEMY_SCRAPER_URL)
         : import.meta.env.VITE_SUPABASE_URL);
 
 const readFunctionError = async (response: Response) => {
