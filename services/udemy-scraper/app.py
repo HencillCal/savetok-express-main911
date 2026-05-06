@@ -62,21 +62,93 @@ def sanitize_filename(value: str, fallback: str = "download") -> str:
     return v or fallback
 
 
-def extract_with_playwright(url: str):
+def extract_with_playwright(url: str, body: dict | None = None):
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print("Playwright not available:", e)
         return []
 
+    mp4_urls = set()
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
-            page = browser.new_page(user_agent=USER_AGENT)
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            content = page.content()
-            browser.close()
-            return extract_mp4_urls(content)
+            headless = os.environ.get("USE_PLAYWRIGHT_HEADFUL", "0") not in ("1", "true", "yes")
+            browser = pw.chromium.launch(headless=headless, args=["--no-sandbox"])
+
+            context_args = {}
+            context = browser.new_context(**context_args)
+
+            # If cookies are provided in body (owner mode / auth), add them to context
+            try:
+                cookies = None
+                if isinstance(body, dict):
+                    cookies = body.get("udemy_cookies") or body.get("cookies")
+                env_cookie = os.environ.get("UDEMY_PLAYWRIGHT_COOKIES")
+                if not cookies and env_cookie:
+                    # Expect a JSON array in env var if present
+                    try:
+                        import json as _json
+                        cookies = _json.loads(env_cookie)
+                    except Exception:
+                        cookies = None
+
+                if cookies and isinstance(cookies, list):
+                    # Normalize cookies to Playwright shape
+                    normalized = []
+                    for c in cookies:
+                        if isinstance(c, dict) and c.get("name") and c.get("value"):
+                            normalized.append({
+                                "name": c.get("name"),
+                                "value": c.get("value"),
+                                "domain": c.get("domain") or ".udemy.com",
+                                "path": c.get("path") or "/",
+                            })
+                    if normalized:
+                        context.add_cookies(normalized)
+            except Exception as e:
+                print("Failed to add cookies to Playwright context:", e)
+
+            page = context.new_page(user_agent=USER_AGENT)
+
+            # Capture network responses that look like MP4s or are from CDN hosts
+            def on_response(resp):
+                try:
+                    rurl = resp.url
+                    if rurl and (rurl.lower().endswith('.mp4') or re.search(r"udemycdn|cloudfront|amazonaws|akamaized|\.mp4", rurl, re.I)):
+                        mp4_urls.add(rurl)
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+
+            # Navigate and wait for network to settle
+            try:
+                page.goto(url, wait_until="networkidle", timeout=60000)
+            except Exception as e:
+                # Some pages may block; continue to try to capture whatever was loaded
+                print("Playwright page.goto warning:", e)
+
+            # Give the page a short moment to allow XHRs to complete
+            try:
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+            # Grab rendered HTML and extract mp4 urls from inline JSON and markup
+            try:
+                content = page.content()
+                for u in extract_mp4_urls(content):
+                    mp4_urls.add(u)
+            except Exception:
+                pass
+
+            try:
+                context.close()
+                browser.close()
+            except Exception:
+                pass
+
+            return list(mp4_urls)
     except Exception as e:
         print("Playwright extraction failed:", e)
         return []

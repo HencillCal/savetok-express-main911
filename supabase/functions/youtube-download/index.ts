@@ -132,12 +132,38 @@ const extractVideoId = (value: string) => {
   try {
     const url = new URL(value);
     if (url.hostname.endsWith("youtu.be")) return url.pathname.split("/").filter(Boolean)[0] ?? null;
-    if (url.pathname.startsWith("/shorts/")) return url.pathname.split("/")[2] ?? null;
-    if (url.pathname.startsWith("/embed/")) return url.pathname.split("/")[2] ?? null;
+    // Support /shorts/VIDEOID and /embed/VIDEOID patterns robustly
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts[0] === "shorts" && parts[1]) return parts[1];
+    if (parts[0] === "embed" && parts[1]) return parts[1];
     return url.searchParams.get("v");
   } catch {
     return null;
   }
+};
+
+const parsePlayerResponseFromHtml = (html: string): PlayerResponse | null => {
+  // Attempt to extract ytInitialPlayerResponse JSON from inline scripts
+  const patterns = [
+    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*var ytInitialPlayerResponse/s,
+    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*/s,
+    /window\["ytInitialPlayerResponse"\]\s*=\s*(\{.+?\})\s*;/s,
+    /"playerResponse"\s*:\s*(\{.+?\})\s*,\s*"/, // fallback pattern
+  ];
+
+  for (const re of patterns) {
+    const m = re.exec(html);
+    if (m && m[1]) {
+      try {
+        const parsed = JSON.parse(m[1]);
+        return parsed as PlayerResponse;
+      } catch (e) {
+        // ignore parse errors and continue trying other patterns
+      }
+    }
+  }
+
+  return null;
 };
 
 const extractPlaylistId = (value: string) => {
@@ -529,8 +555,32 @@ Deno.serve(async (req) => {
         } as PlayerResponse;
         payload = mapped;
       } catch (invErr) {
-        // rethrow the original Innertube error if fallback also fails
-        throw innertubeErr;
+        // Try parsing the watch page HTML for ytInitialPlayerResponse as a last-resort fallback
+        try {
+          const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+          const resp = await fetchWithRetry(watchUrl, {
+            headers: {
+              "User-Agent": USER_AGENT,
+              Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+          }, { attempts: 2, backoffMs: 400 });
+
+          if (resp.ok) {
+            const html = await resp.text();
+            const parsed = parsePlayerResponseFromHtml(html);
+            if (parsed) {
+              payload = parsed;
+            } else {
+              throw innertubeErr;
+            }
+          } else {
+            throw innertubeErr;
+          }
+        } catch {
+          // rethrow the original Innertube error if fallback also fails
+          throw innertubeErr;
+        }
       }
     }
 
