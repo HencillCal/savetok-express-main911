@@ -533,9 +533,12 @@ Deno.serve(async (req) => {
     }
 
     let payload: PlayerResponse | null = null;
+    let allErrors: string[] = [];
+    
     try {
       payload = await fetchFromInnertube(videoId);
     } catch (innertubeErr) {
+      allErrors.push(`Innertube: ${innertubeErr instanceof Error ? innertubeErr.message : String(innertubeErr)}`);
       // If Innertube fails (sometimes for Shorts or restricted content), try Invidious video endpoint as a fallback.
       try {
         const inv = await fetchFromInvidious<any>(`/videos/${videoId}`);
@@ -555,6 +558,7 @@ Deno.serve(async (req) => {
         } as PlayerResponse;
         payload = mapped;
       } catch (invErr) {
+        allErrors.push(`Invidious: ${invErr instanceof Error ? invErr.message : String(invErr)}`);
         // Try parsing the watch page HTML for ytInitialPlayerResponse as a last-resort fallback
         try {
           const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
@@ -572,14 +576,14 @@ Deno.serve(async (req) => {
             if (parsed) {
               payload = parsed;
             } else {
-              throw innertubeErr;
+              throw new Error("Could not parse ytInitialPlayerResponse from watch page");
             }
           } else {
-            throw innertubeErr;
+            throw new Error(`Watch page returned ${resp.status}`);
           }
-        } catch {
-          // rethrow the original Innertube error if fallback also fails
-          throw innertubeErr;
+        } catch (htmlErr) {
+          allErrors.push(`HTML parser: ${htmlErr instanceof Error ? htmlErr.message : String(htmlErr)}`);
+          throw new Error(`All YouTube sources exhausted: ${allErrors.join("; ")}`);
         }
       }
     }
