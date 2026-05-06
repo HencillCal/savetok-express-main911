@@ -62,6 +62,21 @@ Deno.serve(async (req) => {
 
     // Public preview extraction (no credentials)
     if (requestedMode === "preview") {
+      // First, try the external Udemy scraper if configured (better at handling bot detection)
+      const scraper = Deno.env.get("UDEMY_SCRAPER_URL");
+      if (scraper) {
+        try {
+          const fallback = await fetch(`${scraper.replace(/\/+$/, "")}/functions/v1/udemy-download`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({ url: requestedUrl, mode: "preview" }),
+          });
+          if (fallback.ok) return json(await fallback.json());
+        } catch {
+          // ignore fallback failure and try direct approach below
+        }
+      }
+
       const resp = await fetchWithRetry(finalUrl, {
         headers: {
           "User-Agent": USER_AGENT,
