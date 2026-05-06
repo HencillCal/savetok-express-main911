@@ -18,6 +18,9 @@ verify_jwt = false
 [functions.linkedin-download]
 verify_jwt = false
 
+[functions.udemy-download]
+verify_jwt = false
+
 [functions.tinyurl-tools]
 verify_jwt = false
 

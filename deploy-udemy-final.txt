@@ -1,0 +1,17 @@
+﻿node.exe : WARNING: Docker is not running
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Users\Jinwiil Onginjo\AppDat ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (WARNING: Docker is not running:St 
+   ring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Uploading asset (udemy-download): supabase/functions/udemy-download/index.ts
+Uploading asset (udemy-download): supabase/functions/_shared/http.ts
+unexpected deploy status 400: {"message":"Failed to bundle the function 
+(reason: The module's source code could not be parsed: Expected unicode escape 
+at file:///tmp/user_fn_mdeaizzwijbnarzqrlbh_439ba7f3-6d09-4c1b-8e42-b7de3e8183a
+6_1/source/supabase/functions/udemy-download/index.ts:23:36\n\n    const 
+mp4Regex = /https?:\\\\/\\\\/[^\\\"'\\s>]+\\\\.mp4[^\\\"'\\s>]*/gi;\n          
+                           ~)."}
+Try rerunning the command with --debug to troubleshoot the error.

@@ -192,6 +192,9 @@ const parsePlayerResponseFromHtml = (html: string): PlayerResponse | null => {
     /window\["ytInitialPlayerResponse"\]\s*=\s*/i,
     /window\['ytInitialPlayerResponse'\]\s*=\s*/i,
     /"playerResponse"\s*:\s*/i,
+    /var\s+ytInitialPlayerResponse\s*=\s*/i,
+    /let\s+ytInitialPlayerResponse\s*=\s*/i,
+    /const\s+ytInitialPlayerResponse\s*=\s*/i,
   ];
 
   for (const pattern of patterns) {

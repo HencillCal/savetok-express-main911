@@ -20,7 +20,7 @@ const ALLOWED_DOWNLOAD_HOSTS = [
 
 const extractMp4Urls = (html: string) => {
   const urls = new Set<string>();
-  const mp4Regex = /https?:\\/\\/[^\"'\s>]+\\.mp4[^\"'\s>]*/gi;
+  const mp4Regex = /https?:\/\/[^\"'\s>]+\\.mp4[^\"'\s>]*/gi;
   let m: RegExpExecArray | null;
   while ((m = mp4Regex.exec(html))) {
     const u = m[0];
@@ -65,8 +65,20 @@ Deno.serve(async (req) => {
       const resp = await fetchWithRetry(finalUrl, {
         headers: {
           "User-Agent": USER_AGENT,
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
           "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+          "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+          "Sec-Ch-Ua-Mobile": "?0",
+          "Sec-Ch-Ua-Platform": '"Windows"',
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          "Sec-Fetch-User": "?1",
+          "Upgrade-Insecure-Requests": "1",
+          Referer: "https://www.google.com/",
         },
       }, { attempts: 5, backoffMs: 600 });
 
