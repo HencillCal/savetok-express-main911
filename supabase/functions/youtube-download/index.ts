@@ -331,22 +331,28 @@ const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
   return best?.url ? normalizeUrl(best.url) : null;
 };
 
-const bestVideoStream = (video: YouTubeVideo) =>
-  video.formatStreams
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
-    .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality))[0] ?? null;
+const allVideoStreams = (video: YouTubeVideo) =>
+  (video.formatStreams ?? [])
+    .filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
+    .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality));
 
-const bestAdaptiveVideoStream = (video: YouTubeVideo) =>
-  video.adaptiveFormats
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
+const bestVideoStream = (video: YouTubeVideo) => allVideoStreams(video)[0] ?? null;
+
+const allAdaptiveVideoStreams = (video: YouTubeVideo) =>
+  (video.adaptiveFormats ?? [])
+    .filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
     .sort((a, b) =>
       numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality)
-      || numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
+      || numericBitrate(b.bitrate) - numericBitrate(a.bitrate));
 
-const bestAudioStream = (video: YouTubeVideo) =>
-  video.adaptiveFormats
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("audio/"))
-    .sort((a, b) => numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
+const bestAdaptiveVideoStream = (video: YouTubeVideo) => allAdaptiveVideoStreams(video)[0] ?? null;
+
+const allAudioStreams = (video: YouTubeVideo) =>
+  (video.adaptiveFormats ?? [])
+    .filter((stream) => stream.url && stream.mimeType?.includes("audio/"))
+    .sort((a, b) => numericBitrate(b.bitrate) - numericBitrate(a.bitrate));
+
+const bestAudioStream = (video: YouTubeVideo) => allAudioStreams(video)[0] ?? null;
 
 const bestMp4AudioStream = (video: YouTubeVideo) =>
   video.adaptiveFormats
@@ -387,47 +393,76 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
   const separateTracks = !progressiveVideoStream && Boolean(adaptiveVideoStream?.url) && Boolean(fallbackAudioStream?.url);
   const downloads = [];
 
-  if (mode === "audio" && audioStream?.url) {
-    downloads.push({
-      label: "Audio",
-      url: audioStream.url,
-      filename: `${videoId}.${audioExtension(audioStream)}`,
-      functionName: "youtube-download",
-      quality: audioStream.audioQuality ?? null,
-    });
+  if (mode === "audio") {
+    // Audio mode: add all audio streams in quality order
+    for (const audio of allAudioStreams(video)) {
+      if (audio.url) {
+        downloads.push({
+          label: `Audio ${audio.audioQuality ?? ''} (${audio.bitrate ? numericBitrate(audio.bitrate) + 'bps' : 'unknown'})`
+            .replace(/\s+/g, ' ').trim(),
+          url: audio.url,
+          filename: `${videoId}-${downloads.filter(d => d.label.startsWith('Audio')).length + 1}.${audioExtension(audio)}`,
+          functionName: "youtube-download",
+          quality: audio.audioQuality ?? null,
+        });
+      }
+    }
+  } else {
+    // Video mode: add video streams
+    if (canMerge && adaptiveVideoStream?.url && preferredMp4AudioStream?.url) {
+      // Merged option
+      downloads.push({
+        label: `HD Merged (${adaptiveVideoStream.qualityLabel ?? adaptiveVideoStream.quality ?? 'Unknown'})`,
+        url: adaptiveVideoStream.url,
+        filename: `${videoId}.mp4`,
+        functionName: "youtube-download",
+        quality: adaptiveVideoStream.qualityLabel ?? adaptiveVideoStream.quality ?? null,
+        mergeStrategy: "mux-mp4" as const,
+        mergeAudioUrl: preferredMp4AudioStream.url,
+      });
+    }
+    
+    // Add all available video qualities
+    for (const vid of allAdaptiveVideoStreams(video)) {
+      if (vid.url && vid.mimeType?.includes("video")) {
+        downloads.push({
+          label: `Video ${vid.qualityLabel ?? vid.quality ?? 'Unknown'} (video only)`,
+          url: vid.url,
+          filename: `${videoId}-${vid.qualityLabel ?? 'video'}.mp4`,
+          functionName: "youtube-download",
+          quality: vid.qualityLabel ?? vid.quality ?? null,
+        });
+      }
+    }
+    
+    // Add all progressive streams (contains both video and audio)
+    for (const vid of allVideoStreams(video)) {
+      if (vid.url) {
+        downloads.push({
+          label: `${vid.qualityLabel ?? 'Video'} (with audio)`,
+          url: vid.url,
+          filename: `${videoId}-${vid.qualityLabel ?? 'video'}.mp4`,
+          functionName: "youtube-download",
+          quality: vid.qualityLabel ?? vid.quality ?? null,
+        });
+      }
+    }
+    
+    // Add all audio options
+    for (const audio of allAudioStreams(video)) {
+      if (audio.url) {
+        downloads.push({
+          label: `Audio ${audio.audioQuality ?? 'Unknown'}`,
+          url: audio.url,
+          filename: `${videoId}-audio.${audioExtension(audio)}`,
+          functionName: "youtube-download",
+          quality: audio.audioQuality ?? null,
+        });
+      }
+    }
   }
-  if (canMerge && adaptiveVideoStream?.url && preferredMp4AudioStream?.url) {
-    downloads.push({
-      label: "Merged MP4",
-      url: adaptiveVideoStream.url,
-      filename: `${videoId}.mp4`,
-      functionName: "youtube-download",
-      quality: adaptiveVideoStream.qualityLabel ?? adaptiveVideoStream.quality ?? null,
-      mergeStrategy: "mux-mp4" as const,
-      mergeAudioUrl: preferredMp4AudioStream.url,
-    });
-  }
-  if (videoStream?.url) {
-    downloads.push({
-      label: [
-        videoStream.qualityLabel ?? videoStream.quality ?? "Video",
-        canMerge || separateTracks ? "video only" : null,
-      ].filter(Boolean).join(" "),
-      url: videoStream.url,
-      filename: `${videoId}.mp4`,
-      functionName: "youtube-download",
-      quality: videoStream.qualityLabel ?? videoStream.quality ?? null,
-    });
-  }
-  if (mode !== "audio" && audioStream?.url) {
-    downloads.push({
-      label: "Audio",
-      url: audioStream.url,
-      filename: `${videoId}.${audioExtension(audioStream)}`,
-      functionName: "youtube-download",
-      quality: audioStream.audioQuality ?? null,
-    });
-  }
+  
+  // Always add thumbnail
   downloads.push({
     label: "Thumbnail",
     url: thumbnail,
