@@ -115,7 +115,7 @@ const normalizeUrl = (url: string) => {
   return url;
 };
 
-const extractStreamUrl = (stream: StreamFormat): string | null => {
+const extractStreamUrl = (stream: StreamFormat, playerScriptUrl?: string): string | null => {
   if (stream.url) return normalizeUrl(stream.url);
 
   const cipher = stream.signatureCipher ?? stream.cipher;
@@ -129,10 +129,21 @@ const extractStreamUrl = (stream: StreamFormat): string | null => {
   const signature = params.get("s") ?? params.get("sig");
   const signatureParam = params.get("sp");
   if (signature) {
+    // Try to decode signature using cached player decipher
+    let sigValue = signature;
+    if (playerScriptUrl && playerDecipherCache.has(playerScriptUrl)) {
+      try {
+        const fn = playerDecipherCache.get(playerScriptUrl)!;
+        sigValue = fn(signature);
+      } catch {
+        sigValue = signature;
+      }
+    }
+
     if (signatureParam) {
-      finalUrl += `&${encodeURIComponent(signatureParam)}=${encodeURIComponent(signature)}`;
+      finalUrl += `&${encodeURIComponent(signatureParam)}=${encodeURIComponent(sigValue)}`;
     } else {
-      finalUrl += `&sig=${encodeURIComponent(signature)}`;
+      finalUrl += `&sig=${encodeURIComponent(sigValue)}`;
     }
   }
 
@@ -206,9 +217,199 @@ const extractInnertubeApiKey = (html: string) =>
   ?? html.match(/["']INNERTUBE_API_KEY["']\s*:\s*["']([^"']+)["']/)?.[1]
   ?? null;
 
-const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
+// Player JS decipher cache keyed by player script URL
+const playerDecipherCache = new Map<string, (sig: string) => string>();
+
+const extractPlayerScriptUrlFromHtml = (html: string): string | null => {
+  const patterns = [
+    /"PLAYER_JS_URL"\s*:\s*"([^"]+)"/,
+    /"jsUrl"\s*:\s*"([^"]+)"/,
+    /"assets"\s*:\s*\{[^}]*"js"\s*:\s*"([^"]+)"/,
+    /<script[^>]+src="([^"]*player[^"]+\.js)"/i,
+    /<script[^>]+src="(\/s\/player[^"]+\.js)"/i,
+  ];
+
+  for (const re of patterns) {
+    const m = re.exec(html);
+    if (m && m[1]) {
+      let url = m[1];
+      // Unescape JSON escaped slashes
+      url = url.replace(/\\\//g, "/");
+      if (url.startsWith("//")) return `https:${url}`;
+      if (url.startsWith("/")) return `https://www.youtube.com${url}`;
+      if (!url.startsWith("http")) return `https://www.youtube.com/${url}`;
+      return url;
+    }
+  }
+
+  return null;
+};
+
+const parseDecipherOperations = (body: string): ((sig: string) => string) | null => {
+  try {
+    // Find the decipher function definition
+    const fnRegexes = [
+      /([A-Za-z0-9_$]{2,})=function\(\w\)\{[\s\S]*?return \w+\.join\(""\)\}/,
+      /function\s+([A-Za-z0-9_$]{2,})\(\w\)\{[\s\S]*?return \w+\.join\(""\)\}/,
+    ];
+
+    let fnMatch: RegExpMatchArray | null = null;
+    for (const r of fnRegexes) {
+      const m = body.match(r);
+      if (m) {
+        fnMatch = m;
+        break;
+      }
+    }
+
+    if (!fnMatch) return null;
+
+    const fnName = fnMatch[1];
+    // Extract the whole function body text so we can inspect calls
+    const fnBodyRegex = new RegExp(`${fnName}=function\\(\\w\\)\\{([\\s\\S]*?)return\\s+\\w+\\.join\\(\\"\\"\\)\\}`);
+    const fnBodyMatch = body.match(fnBodyRegex) || body.match(new RegExp(`function\\s+${fnName}\\(\\w\\)\\{([\\s\\S]*?)return\\s+\\w+\\.join\\(\\"\\"\\)\\}`));
+    const fnBody = fnBodyMatch ? fnBodyMatch[1] : fnMatch[0];
+
+    // Find helper object name used in the function (e.g., var aB={...};) by finding first occurrence of X.Y(a,\d)
+    const helperCallMatch = fnBody.match(/([A-Za-z0-9_$]{2,})\.[A-Za-z0-9_$]{2,}\(\w,\d+\)/);
+    const helperName = helperCallMatch ? helperCallMatch[1] : null;
+
+    const ops: Array<{op: string; arg?: number}> = [];
+
+    if (helperName) {
+      // Extract helper object literal
+      const helperRegex = new RegExp(`(?:var|let|const)\\s+${helperName}=\\{([\\s\\S]*?)\\};`);
+      const helperMatch = body.match(helperRegex);
+      const helperBody = helperMatch ? helperMatch[1] : "";
+
+      // Build method -> op map
+      const methodRe = /([A-Za-z0-9_$]{2,})\s*:\s*function\(\w(?:,\w)?\)\{([\s\S]*?)\}/g;
+      const methodMap: Record<string, string> = {};
+      let mm: RegExpExecArray | null;
+      while ((mm = methodRe.exec(helperBody))) {
+        const name = mm[1];
+        const bodyText = mm[2];
+        if (/\.reverse\(\)/.test(bodyText)) methodMap[name] = "reverse";
+        else if (/\.slice\(/.test(bodyText)) methodMap[name] = "slice";
+        else if (/\.splice\(0,/.test(bodyText)) methodMap[name] = "splice";
+        else if (/var\s+\w+=\w\[0\];\w\[0\]=\w\[\w%\w.length\];\w\[\w\]=\w;/.test(bodyText) || /\[0\]=\w\[\w%\w.length\]/.test(bodyText)) methodMap[name] = "swap";
+        else if (/return\s+\w+\.join\(\"\"\)/.test(bodyText)) methodMap[name] = "join";
+        else methodMap[name] = "unknown";
+      }
+
+      // Extract calls in order
+      const callRe = new RegExp(`${helperName}\.([A-Za-z0-9_$]{2,})\(\w,(\d+)\)`, "g");
+      let cm: RegExpExecArray | null;
+      while ((cm = callRe.exec(fnBody))) {
+        const method = cm[1];
+        const arg = parseInt(cm[2], 10);
+        const mapped = methodMap[method] ?? "unknown";
+        ops.push({ op: mapped, arg });
+      }
+    } else {
+      // Try to extract direct operations (no helper object)
+      const directCallRe = /a\.reverse\(\)|a\.slice\((\d+)\)|a\.splice\(0,(\d+)\)|a\[0\]=a\[(\d+)\%a.length\];/g;
+      let dm: RegExpExecArray | null;
+      while ((dm = directCallRe.exec(fnBody))) {
+        if (dm[0].includes("reverse")) ops.push({ op: "reverse" });
+        else if (dm[1]) ops.push({ op: "slice", arg: parseInt(dm[1], 10) });
+        else if (dm[2]) ops.push({ op: "splice", arg: parseInt(dm[2], 10) });
+        else if (dm[3]) ops.push({ op: "swap", arg: parseInt(dm[3], 10) });
+      }
+    }
+
+    if (!ops.length) return null;
+
+    // Return decipher function that applies parsed ops
+    return (sig: string) => {
+      try {
+        let a = sig.split("");
+        for (const step of ops) {
+          switch (step.op) {
+            case "reverse":
+              a = a.reverse();
+              break;
+            case "slice":
+              a = a.slice(step.arg ?? 0);
+              break;
+            case "splice":
+              a.splice(0, step.arg ?? 0);
+              break;
+            case "swap": {
+              const idx = step.arg ?? 0;
+              const i = idx % a.length;
+              const tmp = a[0];
+              a[0] = a[i];
+              a[i] = tmp;
+              break;
+            }
+            default:
+              // Unknown op; bail out and return original
+              return sig;
+          }
+        }
+        return a.join("");
+      } catch {
+        return sig;
+      }
+    };
+  } catch {
+    return null;
+  }
+};
+
+const getDecipherFromPlayerUrl = async (playerUrl: string | null) => {
+  if (!playerUrl) return null;
+  if (playerDecipherCache.has(playerUrl)) return playerDecipherCache.get(playerUrl)!;
+
+  try {
+    const resp = await fetchWithRetry(playerUrl, {
+      headers: { "User-Agent": USER_AGENT, Accept: "*/*" },
+    }, { attempts: 2, backoffMs: 300 });
+    if (!resp.ok) return null;
+    const body = await resp.text();
+    let decipher = parseDecipherOperations(body);
+
+    if (!decipher) {
+      try {
+        const fnRegex = /([A-Za-z0-9_$]{2,})=function\(\w\)\{[\s\S]*?return \w+\.join\(\"\"\)\}/;
+        const fnRegex2 = /function\s+([A-Za-z0-9_$]{2,})\(\w\)\{[\s\S]*?return \w+\.join\(\"\"\)\}/;
+        const m = body.match(fnRegex) || body.match(fnRegex2);
+        if (m && m[1]) {
+          const fnName = m[1];
+          try {
+            const factory = new Function(`${body};\nreturn ${fnName};`);
+            const fnAny = factory();
+            if (typeof fnAny === "function") {
+              decipher = (sig: string) => {
+                try {
+                  const out = fnAny(sig);
+                  return typeof out === "string" ? out : sig;
+                } catch {
+                  return sig;
+                }
+              };
+            }
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (decipher) playerDecipherCache.set(playerUrl, decipher);
+    return decipher;
+  } catch {
+    return null;
+  }
+};
+
+const fetchFromInnertube = async (videoId: string): Promise<{ payload: PlayerResponse; playerScriptUrl?: string }> => {
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&bpctr=9999999999&has_verified=1&hl=en&gl=US`;
   let watchHtml: string | null = null;
+  let playerScriptUrl: string | null = null;
 
   try {
     const watchResponse = await fetchWithRetry(watchUrl, {
@@ -224,6 +425,16 @@ const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
 
     if (watchResponse.ok) {
       watchHtml = await watchResponse.text();
+      // Try to discover player script and prefetch decipher ops
+      playerScriptUrl = extractPlayerScriptUrlFromHtml(watchHtml);
+      if (playerScriptUrl) {
+        try {
+          await getDecipherFromPlayerUrl(playerScriptUrl);
+        } catch {
+          // ignore
+        }
+      }
+
       const apiKey = extractInnertubeApiKey(watchHtml);
       if (apiKey) {
         const playerResponse = await fetchWithRetry(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}&prettyPrint=false`, {
@@ -260,7 +471,7 @@ const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
           const payload = await playerResponse.json() as PlayerResponse;
           const playability = payload.playabilityStatus?.status;
           if (!playability || playability === "OK") {
-            return payload;
+            return { payload, playerScriptUrl: playerScriptUrl ?? undefined };
           }
         }
       }
@@ -271,11 +482,11 @@ const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
 
   if (watchHtml) {
     const htmlPayload = parsePlayerResponseFromHtml(watchHtml);
-    if (htmlPayload) return htmlPayload;
+    if (htmlPayload) return { payload: htmlPayload, playerScriptUrl: playerScriptUrl ?? undefined };
   }
 
   const infoPayload = await fetchPlayerResponseFromGetVideoInfo(videoId);
-  if (infoPayload) return infoPayload;
+  if (infoPayload) return { payload: infoPayload, playerScriptUrl: playerScriptUrl ?? undefined };
 
   throw new Error("Could not read YouTube player configuration");
 };
@@ -285,33 +496,33 @@ const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
   return best?.url ? normalizeUrl(best.url) : null;
 };
 
-const allVideoStreams = (video: YouTubeVideo) =>
+const allVideoStreams = (video: YouTubeVideo, playerScriptUrl?: string) =>
   (video.formatStreams ?? [])
-    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream, playerScriptUrl) }))
     .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality));
 
-const bestVideoStream = (video: YouTubeVideo) => allVideoStreams(video)[0] ?? null;
+const bestVideoStream = (video: YouTubeVideo, playerScriptUrl?: string) => allVideoStreams(video, playerScriptUrl)[0] ?? null;
 
-const allAdaptiveVideoStreams = (video: YouTubeVideo) =>
+const allAdaptiveVideoStreams = (video: YouTubeVideo, playerScriptUrl?: string) =>
   (video.adaptiveFormats ?? [])
-    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream, playerScriptUrl) }))
     .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) =>
       numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality)
       || numericBitrate(b.bitrate) - numericBitrate(a.bitrate));
 
-const bestAdaptiveVideoStream = (video: YouTubeVideo) => allAdaptiveVideoStreams(video)[0] ?? null;
+const bestAdaptiveVideoStream = (video: YouTubeVideo, playerScriptUrl?: string) => allAdaptiveVideoStreams(video, playerScriptUrl)[0] ?? null;
 
-const bestAudioStream = (video: YouTubeVideo) =>
+const bestAudioStream = (video: YouTubeVideo, playerScriptUrl?: string) =>
   (video.adaptiveFormats ?? [])
-    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream, playerScriptUrl) }))
     .filter((stream) => stream.url && stream.mimeType?.includes("audio/"))
     .sort((a, b) => numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
 
-const bestMp4AudioStream = (video: YouTubeVideo) =>
+const bestMp4AudioStream = (video: YouTubeVideo, playerScriptUrl?: string) =>
   (video.adaptiveFormats ?? [])
-    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream, playerScriptUrl) }))
     .filter((stream) => stream.url && stream.mimeType?.includes("audio/mp4"))
     .sort((a, b) => numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
 
@@ -334,14 +545,14 @@ const toYouTubeVideo = (payload: PlayerResponse): YouTubeVideo => ({
   adaptiveFormats: payload.streamingData?.adaptiveFormats ?? [],
 });
 
-const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
+const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string, playerScriptUrl?: string) => {
   const thumbnail = bestThumbnail(video.thumbnails)
     ?? `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`;
-  const progressiveVideoStream = bestVideoStream(video);
-  const adaptiveVideoStream = progressiveVideoStream ? null : bestAdaptiveVideoStream(video);
+  const progressiveVideoStream = bestVideoStream(video, playerScriptUrl);
+  const adaptiveVideoStream = progressiveVideoStream ? null : bestAdaptiveVideoStream(video, playerScriptUrl);
   const videoStream = progressiveVideoStream ?? adaptiveVideoStream;
-  const preferredMp4AudioStream = bestMp4AudioStream(video);
-  const fallbackAudioStream = bestAudioStream(video);
+  const preferredMp4AudioStream = bestMp4AudioStream(video, playerScriptUrl);
+  const fallbackAudioStream = bestAudioStream(video, playerScriptUrl);
   const audioStream = mode === "audio"
     ? fallbackAudioStream
     : preferredMp4AudioStream ?? fallbackAudioStream;
@@ -373,7 +584,7 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
     });
   }
 
-  for (const vid of allAdaptiveVideoStreams(video)) {
+  for (const vid of allAdaptiveVideoStreams(video, playerScriptUrl)) {
     if (vid.url && vid.mimeType?.includes("video")) {
       downloads.push({
         label: `Video ${vid.qualityLabel ?? vid.quality ?? 'Unknown'} (video only)`,
@@ -385,7 +596,7 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
     }
   }
 
-  for (const vid of allVideoStreams(video)) {
+  for (const vid of allVideoStreams(video, playerScriptUrl)) {
     if (vid.url) {
       downloads.push({
         label: `${vid.qualityLabel ?? 'Video'} (with audio)`,
@@ -493,8 +704,9 @@ export const handleYouTubeDownload = async (req: Request) => {
       const settled = await Promise.allSettled(
         videos.map(async (entry) => {
           if (!entry.videoId) return null;
-          const payload = await fetchFromInnertube(entry.videoId);
-          return makeVideoItem(entry.videoId, toYouTubeVideo(payload), "video");
+          const res = await fetchFromInnertube(entry.videoId);
+          const video = toYouTubeVideo(res.payload);
+          return makeVideoItem(entry.videoId, video, "video", res.playerScriptUrl);
         }),
       );
 
@@ -531,10 +743,11 @@ export const handleYouTubeDownload = async (req: Request) => {
     
     // Try Innertube first
     try {
-      payload = await fetchFromInnertube(videoId);
+      const res = await fetchFromInnertube(videoId);
+      payload = res.payload;
       const video = toYouTubeVideo(payload as PlayerResponse);
-      item = makeVideoItem(videoId, video, requestedMode);
-      
+      item = makeVideoItem(videoId, video, requestedMode, res.playerScriptUrl);
+
       // If Innertube succeeds but returns zero streams, continue to fallback methods
       if (!item.downloads.length) {
         allErrors.push("Innertube: No downloadable streams returned");
@@ -593,8 +806,10 @@ export const handleYouTubeDownload = async (req: Request) => {
           const html = await resp.text();
           const parsed = parsePlayerResponseFromHtml(html);
           if (parsed) {
+            const playerScriptUrl = extractPlayerScriptUrlFromHtml(html);
+            if (playerScriptUrl) await getDecipherFromPlayerUrl(playerScriptUrl);
             const video = toYouTubeVideo(parsed);
-            item = makeVideoItem(videoId, video, requestedMode);
+            item = makeVideoItem(videoId, video, requestedMode, playerScriptUrl);
             if (item.downloads.length) {
               payload = parsed;
             } else {
