@@ -128,34 +128,42 @@ const extractStreamUrl = (stream: StreamFormat, playerScriptUrl?: string): strin
   let finalUrl = url;
   const signature = params.get("s") ?? params.get("sig");
   const signatureParam = params.get("sp");
-  if (signature) {
-    // Try to decode signature using cached player decipher
-    let sigValue = signature;
-    if (playerScriptUrl && playerDecipherCache.has(playerScriptUrl)) {
+    if (!decipher) {
       try {
-        const fn = playerDecipherCache.get(playerScriptUrl)!;
-        sigValue = fn(signature);
+        const fnRegex = /([A-Za-z0-9_$]{2,})=function\([^)]*\)\s*\{|function\s+([A-Za-z0-9_$]{2,})\([^)]*\)\s*\{/;
+        const m = body.match(fnRegex);
+        const fnName = m ? (m[1] || m[2]) : null;
+        if (fnName) {
+          try {
+            const sanitized = body.replace(/\/\/# sourceMappingURL=[^\n]*\n?/g, "").replace(/\/\*# sourceMappingURL=[^*]*\*\//g, "");
+            const sandbox = [
+              'var window = {location:{hostname:"www.youtube.com"}, ytcfg:{}, ytplayer:{}};',
+              'var self = window; var globalThis = window; var document = {cookie:"", createElement:function(){return { setAttribute:function(){}, appendChild:function(){}, firstChild:null, style:{} }; }, getElementsByTagName:function(){return [];}};',
+              'var navigator = { userAgent: "node" }; var location = window.location;',
+              'function atob(s) { try { return atob(s); } catch(e) { return ""; } }',
+            ].join('\n');
+
+            const wrapper = `${sandbox}\n${sanitized}\n;return (typeof ${fnName} !== 'undefined' ? ${fnName} : (typeof window.${fnName} !== 'undefined' ? window.${fnName} : null));`;
+            const factory = new Function(wrapper);
+            const fnAny = factory();
+            if (typeof fnAny === "function") {
+              decipher = (sig: string) => {
+                try {
+                  const out = fnAny(sig);
+                  return typeof out === "string" ? out : sig;
+                } catch {
+                  return sig;
+                }
+              };
+            }
+          } catch {
+            // ignore evaluation errors
+          }
+        }
       } catch {
-        sigValue = signature;
+        // ignore
       }
     }
-
-    if (signatureParam) {
-      finalUrl += `&${encodeURIComponent(signatureParam)}=${encodeURIComponent(sigValue)}`;
-    } else {
-      finalUrl += `&sig=${encodeURIComponent(sigValue)}`;
-    }
-  }
-
-  for (const [key, value] of params.entries()) {
-    if (key === "url" || key === "u" || key === "s" || key === "sig" || key === "sp") continue;
-    finalUrl += `&${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
-  }
-
-  return normalizeUrl(finalUrl);
-};
-
-const numericQuality = (value: string | undefined) =>
   parseInt((value ?? "0").replace(/\D/g, "") || "0", 10);
 
 const numericBitrate = (value: string | number | undefined) =>
@@ -247,70 +255,137 @@ const extractPlayerScriptUrlFromHtml = (html: string): string | null => {
 
 const parseDecipherOperations = (body: string): ((sig: string) => string) | null => {
   try {
-    // Find the decipher function definition
-    const fnRegexes = [
-      /([A-Za-z0-9_$]{2,})=function\(\w\)\{[\s\S]*?return \w+\.join\(""\)\}/,
-      /function\s+([A-Za-z0-9_$]{2,})\(\w\)\{[\s\S]*?return \w+\.join\(""\)\}/,
-    ];
+    // Find candidate function name (supports several minified patterns)
+    const fnNameMatch = body.match(/([A-Za-z0-9_$]{2,})=function\([^)]*\)\s*\{/) || body.match(/function\s+([A-Za-z0-9_$]{2,})\([^)]*\)\s*\{/);
+    if (!fnNameMatch) return null;
+    const fnName = fnNameMatch[1];
 
-    let fnMatch: RegExpMatchArray | null = null;
-    for (const r of fnRegexes) {
-      const m = body.match(r);
-      if (m) {
-        fnMatch = m;
-        break;
+    // Extract the function body by finding the opening brace for the function and matching braces
+    const fnOccur = body.indexOf(fnName);
+    if (fnOccur === -1) return null;
+    const firstBrace = body.indexOf("{", fnOccur);
+    if (firstBrace === -1) return null;
+    let depth = 0;
+    let inString = false;
+    let quoteChar = "";
+    let escaped = false;
+    let fnBody = "";
+    let fnBodyStart = -1;
+    for (let i = firstBrace; i < body.length; i += 1) {
+      const ch = body[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (ch === quoteChar) {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        inString = true;
+        quoteChar = ch;
+        continue;
+      }
+      if (ch === "{") {
+        depth += 1;
+        if (depth === 1) fnBodyStart = i + 1;
+      } else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0 && fnBodyStart >= 0) {
+          fnBody = body.slice(fnBodyStart, i);
+          break;
+        }
       }
     }
+    if (!fnBody) return null;
 
-    if (!fnMatch) return null;
+    // Gather simple numeric variable assignments inside the function (helps when args are variables)
+    const varMap: Record<string, number> = {};
+    const varRe = /(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*(\d+)\s*;/g;
+    let vm: RegExpExecArray | null;
+    while ((vm = varRe.exec(fnBody))) {
+      varMap[vm[1]] = parseInt(vm[2], 10);
+    }
 
-    const fnName = fnMatch[1];
-    // Extract the whole function body text so we can inspect calls
-    const fnBodyRegex = new RegExp(`${fnName}=function\\(\\w\\)\\{([\\s\\S]*?)return\\s+\\w+\\.join\\(\\"\\"\\)\\}`);
-    const fnBodyMatch = body.match(fnBodyRegex) || body.match(new RegExp(`function\\s+${fnName}\\(\\w\\)\\{([\\s\\S]*?)return\\s+\\w+\\.join\\(\\"\\"\\)\\}`));
-    const fnBody = fnBodyMatch ? fnBodyMatch[1] : fnMatch[0];
+    const ops: Array<{ op: string; arg?: number }> = [];
 
-    // Find helper object name used in the function (e.g., var aB={...};) by finding first occurrence of X.Y(a,\d)
-    const helperCallMatch = fnBody.match(/([A-Za-z0-9_$]{2,})\.[A-Za-z0-9_$]{2,}\(\w,\d+\)/);
-    const helperName = helperCallMatch ? helperCallMatch[1] : null;
+    // Try to detect helper-object calls (e.g., Ab.Cd(a,3)) in order
+    const helperCallRe = /([A-Za-z0-9_$]{2,})\.([A-Za-z0-9_$]{2,})\(\w+\s*,\s*([A-Za-z0-9_$]+)\)/g;
+    const helperCalls: Array<{ obj: string; method: string; argRaw: string }> = [];
+    let hc: RegExpExecArray | null;
+    while ((hc = helperCallRe.exec(fnBody))) {
+      helperCalls.push({ obj: hc[1], method: hc[2], argRaw: hc[3] });
+    }
 
-    const ops: Array<{op: string; arg?: number}> = [];
-
-    if (helperName) {
-      // Extract helper object literal
-      const helperRegex = new RegExp(`(?:var|let|const)\\s+${helperName}=\\{([\\s\\S]*?)\\};`);
+    if (helperCalls.length > 0) {
+      const helperName = helperCalls[0].obj;
+      // Attempt to extract helper object literal
+      const helperRegex = new RegExp(`(?:var|let|const)\\s+${helperName}\\s*=\\s*\\{([\\s\\S]*?)\\}\\s*;`);
       const helperMatch = body.match(helperRegex);
       const helperBody = helperMatch ? helperMatch[1] : "";
 
-      // Build method -> op map
-      const methodRe = /([A-Za-z0-9_$]{2,})\s*:\s*function\(\w(?:,\w)?\)\{([\s\S]*?)\}/g;
+      const methodRe = /([A-Za-z0-9_$]{2,})\s*:\s*function\([^)]*\)\s*\{([\s\S]*?)\}/g;
       const methodMap: Record<string, string> = {};
       let mm: RegExpExecArray | null;
       while ((mm = methodRe.exec(helperBody))) {
         const name = mm[1];
         const bodyText = mm[2];
-        if (/\.reverse\(\)/.test(bodyText)) methodMap[name] = "reverse";
-        else if (/\.slice\(/.test(bodyText)) methodMap[name] = "slice";
-        else if (/\.splice\(0,/.test(bodyText)) methodMap[name] = "splice";
-        else if (/var\s+\w+=\w\[0\];\w\[0\]=\w\[\w%\w.length\];\w\[\w\]=\w;/.test(bodyText) || /\[0\]=\w\[\w%\w.length\]/.test(bodyText)) methodMap[name] = "swap";
-        else if (/return\s+\w+\.join\(\"\"\)/.test(bodyText)) methodMap[name] = "join";
+        if (/\.reverse\(\)/.test(bodyText) || /\breverse\(\)/.test(bodyText)) methodMap[name] = "reverse";
+        else if (/\.slice\(/.test(bodyText) || /\bslice\(/.test(bodyText)) methodMap[name] = "slice";
+        else if (/\.splice\(/.test(bodyText) || /\bsplice\(/.test(bodyText)) methodMap[name] = "splice";
+        else if (/return\s+\w+\.join\(\"\"\)/.test(bodyText) || /\.join\(\"\"\)/.test(bodyText)) methodMap[name] = "join";
+        else if (/(?:\w+\[0\]|a\[0\])\s*=\s*\w+\[\w+%\w+\.length\]/.test(bodyText) || /\[0\]=\w+\[\w+%\w+\.length\]/.test(bodyText)) methodMap[name] = "swap";
         else methodMap[name] = "unknown";
       }
 
-      // Extract calls in order
-      const callRe = new RegExp(`${helperName}\.([A-Za-z0-9_$]{2,})\(\w,(\d+)\)`, "g");
-      let cm: RegExpExecArray | null;
-      while ((cm = callRe.exec(fnBody))) {
-        const method = cm[1];
-        const arg = parseInt(cm[2], 10);
-        const mapped = methodMap[method] ?? "unknown";
-        ops.push({ op: mapped, arg });
+      for (const call of helperCalls) {
+        let argNum = parseInt(call.argRaw, 10);
+        if (Number.isNaN(argNum)) {
+          if (varMap[call.argRaw] !== undefined) argNum = varMap[call.argRaw];
+          else argNum = undefined;
+        }
+        const mapped = methodMap[call.method] ?? "unknown";
+        ops.push({ op: mapped, arg: argNum });
       }
     } else {
-      // Try to extract direct operations (no helper object)
-      const directCallRe = /a\.reverse\(\)|a\.slice\((\d+)\)|a\.splice\(0,(\d+)\)|a\[0\]=a\[(\d+)\%a.length\];/g;
+      // Standalone helper function calls like X(a,3)
+      const standaloneRe = /([A-Za-z0-9_$]{2,})\(\w+\s*,\s*([A-Za-z0-9_$]+)\)/g;
+      const standCalls: Array<{ name: string; argRaw: string }> = [];
+      let sc: RegExpExecArray | null;
+      while ((sc = standaloneRe.exec(fnBody))) {
+        standCalls.push({ name: sc[1], argRaw: sc[2] });
+      }
+
+      if (standCalls.length > 0) {
+        for (const call of standCalls) {
+          const fnRegex = new RegExp(`(?:function\\s+${call.name}\\([^)]*\\)\\{([\\s\\S]*?)\\})|(?:var\\s+${call.name}\\s*=\\s*function\\([^)]*\\)\\{([\\s\\S]*?)\\})`);
+          const match = body.match(fnRegex);
+          const b = match ? (match[1] || match[2] || "") : "";
+          let op = "unknown";
+          if (/\.reverse\(\)/.test(b) || /\breverse\(\)/.test(b)) op = "reverse";
+          else if (/\.slice\(/.test(b) || /\bslice\(/.test(b)) op = "slice";
+          else if (/\.splice\(/.test(b) || /\bsplice\(/.test(b)) op = "splice";
+          else if (/(?:a\[0\]|\w+\[0\])\s*=/.test(b) && /%.*\.length/.test(b)) op = "swap";
+
+          let argNum = parseInt(call.argRaw, 10);
+          if (Number.isNaN(argNum)) {
+            if (varMap[call.argRaw] !== undefined) argNum = varMap[call.argRaw];
+            else argNum = undefined;
+          }
+          ops.push({ op, arg: argNum });
+        }
+      }
+
+      // Direct array operations inside the decipher function
+      const directRe = /a\.reverse\(\)|a\.slice\((\d+)\)|a\.splice\(0,(\d+)\)|a\[0\]\s*=\s*a\[(\d+)\%a.length\]/g;
       let dm: RegExpExecArray | null;
-      while ((dm = directCallRe.exec(fnBody))) {
+      while ((dm = directRe.exec(fnBody))) {
         if (dm[0].includes("reverse")) ops.push({ op: "reverse" });
         else if (dm[1]) ops.push({ op: "slice", arg: parseInt(dm[1], 10) });
         else if (dm[2]) ops.push({ op: "splice", arg: parseInt(dm[2], 10) });
@@ -320,7 +395,7 @@ const parseDecipherOperations = (body: string): ((sig: string) => string) | null
 
     if (!ops.length) return null;
 
-    // Return decipher function that applies parsed ops
+    // Return a decipher function that applies the parsed ops
     return (sig: string) => {
       try {
         let a = sig.split("");
