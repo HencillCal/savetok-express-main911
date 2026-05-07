@@ -333,14 +333,14 @@ const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
 
 const allVideoStreams = (video: YouTubeVideo) =>
   (video.formatStreams ?? [])
-    .filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
+    .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality));
 
 const bestVideoStream = (video: YouTubeVideo) => allVideoStreams(video)[0] ?? null;
 
 const allAdaptiveVideoStreams = (video: YouTubeVideo) =>
   (video.adaptiveFormats ?? [])
-    .filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
+    .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) =>
       numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality)
       || numericBitrate(b.bitrate) - numericBitrate(a.bitrate));
@@ -361,6 +361,9 @@ const bestMp4AudioStream = (video: YouTubeVideo) =>
 
 const audioExtension = (stream: StreamFormat | null | undefined) =>
   stream?.mimeType?.includes("webm") ? "webm" : "m4a";
+
+const videoExtension = (stream: StreamFormat | null | undefined) =>
+  stream?.mimeType?.includes("webm") ? "webm" : "mp4";
 
 const toYouTubeVideo = (payload: PlayerResponse): YouTubeVideo => ({
   title: payload.videoDetails?.title ?? joinRuns(payload.microformat?.playerMicroformatRenderer?.title) ?? "YouTube media",
@@ -428,7 +431,7 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
         downloads.push({
           label: `Video ${vid.qualityLabel ?? vid.quality ?? 'Unknown'} (video only)`,
           url: vid.url,
-          filename: `${videoId}-${vid.qualityLabel ?? 'video'}.mp4`,
+          filename: `${videoId}-${vid.qualityLabel ?? 'video'}.${videoExtension(vid)}`,
           functionName: "youtube-download",
           quality: vid.qualityLabel ?? vid.quality ?? null,
         });
@@ -441,34 +444,23 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
         downloads.push({
           label: `${vid.qualityLabel ?? 'Video'} (with audio)`,
           url: vid.url,
-          filename: `${videoId}-${vid.qualityLabel ?? 'video'}.mp4`,
+          filename: `${videoId}-${vid.qualityLabel ?? 'video'}.${videoExtension(vid)}`,
           functionName: "youtube-download",
           quality: vid.qualityLabel ?? vid.quality ?? null,
         });
       }
     }
-    
-    // Add all audio options
-    for (const audio of allAudioStreams(video)) {
-      if (audio.url) {
-        downloads.push({
-          label: `Audio ${audio.audioQuality ?? 'Unknown'}`,
-          url: audio.url,
-          filename: `${videoId}-audio.${audioExtension(audio)}`,
-          functionName: "youtube-download",
-          quality: audio.audioQuality ?? null,
-        });
-      }
-    }
   }
   
-  // Always add thumbnail
-  downloads.push({
-    label: "Thumbnail",
-    url: thumbnail,
-    filename: `${videoId}-thumbnail.jpg`,
-    functionName: "youtube-download",
-  });
+  // Add thumbnail only if there are actual media downloads available
+  if (downloads.length > 0) {
+    downloads.push({
+      label: "Thumbnail",
+      url: thumbnail,
+      filename: `${videoId}-thumbnail.jpg`,
+      functionName: "youtube-download",
+    });
+  }
 
   return {
     id: videoId,
