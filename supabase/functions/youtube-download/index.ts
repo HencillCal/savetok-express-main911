@@ -773,6 +773,8 @@ Deno.serve(async (req) => {
       return json({ error: "No downloadable streams were found for that video" }, 404);
     }
 
+    const video = toYouTubeVideo(payload as PlayerResponse);
+
     return json({
       platform: "youtube",
       sourceType: requestedMode,
