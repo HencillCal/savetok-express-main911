@@ -35,6 +35,11 @@ type Thumbnail = {
 
 type StreamFormat = {
   url?: string;
+  cipher?: string;
+  signatureCipher?: string;
+  s?: string;
+  sp?: string;
+  sig?: string;
   mimeType?: string;
   audioQuality?: string;
   bitrate?: string | number;
@@ -110,6 +115,35 @@ const normalizeUrl = (url: string) => {
   return url;
 };
 
+const extractStreamUrl = (stream: StreamFormat): string | null => {
+  if (stream.url) return normalizeUrl(stream.url);
+
+  const cipher = stream.signatureCipher ?? stream.cipher;
+  if (!cipher) return null;
+
+  const params = new URLSearchParams(cipher);
+  const url = params.get("url") ?? params.get("u");
+  if (!url) return null;
+
+  let finalUrl = url;
+  const signature = params.get("s") ?? params.get("sig");
+  const signatureParam = params.get("sp");
+  if (signature) {
+    if (signatureParam) {
+      finalUrl += `&${encodeURIComponent(signatureParam)}=${encodeURIComponent(signature)}`;
+    } else {
+      finalUrl += `&sig=${encodeURIComponent(signature)}`;
+    }
+  }
+
+  for (const [key, value] of params.entries()) {
+    if (key === "url" || key === "u" || key === "s" || key === "sig" || key === "sp") continue;
+    finalUrl += `&${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+  }
+
+  return normalizeUrl(finalUrl);
+};
+
 const numericQuality = (value: string | undefined) =>
   parseInt((value ?? "0").replace(/\D/g, "") || "0", 10);
 
@@ -173,7 +207,7 @@ const extractInnertubeApiKey = (html: string) =>
   ?? null;
 
 const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
-  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&bpctr=9999999999&has_verified=1&hl=en`;
+  const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&bpctr=9999999999&has_verified=1&hl=en&gl=US`;
   let watchHtml: string | null = null;
 
   try {
@@ -253,6 +287,7 @@ const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
 
 const allVideoStreams = (video: YouTubeVideo) =>
   (video.formatStreams ?? [])
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
     .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality));
 
@@ -260,6 +295,7 @@ const bestVideoStream = (video: YouTubeVideo) => allVideoStreams(video)[0] ?? nu
 
 const allAdaptiveVideoStreams = (video: YouTubeVideo) =>
   (video.adaptiveFormats ?? [])
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
     .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) =>
       numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality)
@@ -268,13 +304,15 @@ const allAdaptiveVideoStreams = (video: YouTubeVideo) =>
 const bestAdaptiveVideoStream = (video: YouTubeVideo) => allAdaptiveVideoStreams(video)[0] ?? null;
 
 const bestAudioStream = (video: YouTubeVideo) =>
-  video.adaptiveFormats
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("audio/"))
+  (video.adaptiveFormats ?? [])
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
+    .filter((stream) => stream.url && stream.mimeType?.includes("audio/"))
     .sort((a, b) => numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
 
 const bestMp4AudioStream = (video: YouTubeVideo) =>
-  video.adaptiveFormats
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("audio/mp4"))
+  (video.adaptiveFormats ?? [])
+    .map((stream) => ({ ...stream, url: extractStreamUrl(stream) }))
+    .filter((stream) => stream.url && stream.mimeType?.includes("audio/mp4"))
     .sort((a, b) => numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
 
 const audioExtension = (stream: StreamFormat | null | undefined) =>
