@@ -174,72 +174,76 @@ const extractInnertubeApiKey = (html: string) =>
 
 const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&bpctr=9999999999&has_verified=1&hl=en`;
-  const watchResponse = await fetchWithRetry(watchUrl, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  }, {
-    attempts: 3,
-    backoffMs: 500,
-  });
+  let watchHtml: string | null = null;
 
-  if (!watchResponse.ok) {
-    throw new Error(`YouTube watch page error ${watchResponse.status}`);
-  }
-
-  const watchHtml = await watchResponse.text();
-  const apiKey = extractInnertubeApiKey(watchHtml);
-  if (!apiKey) {
-    throw new Error("Could not read YouTube player configuration");
-  }
-
-  const playerResponse = await fetchWithRetry(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}&prettyPrint=false`, {
-    method: "POST",
-    headers: {
-      "User-Agent": ANDROID_USER_AGENT,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "Accept-Language": "en-US,en;q=0.9",
-      Origin: "https://www.youtube.com",
-      Referer: watchResponse.url || watchUrl,
-      "X-YouTube-Client-Name": "3",
-      "X-YouTube-Client-Version": ANDROID_CLIENT_VERSION,
-    },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: "ANDROID",
-          clientVersion: ANDROID_CLIENT_VERSION,
-          hl: "en",
-          gl: "US",
-        },
+  try {
+    const watchResponse = await fetchWithRetry(watchUrl, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
       },
-      videoId,
-      contentCheckOk: true,
-      racyCheckOk: true,
-    }),
-  }, {
-    attempts: 3,
-    backoffMs: 500,
-  });
+    }, {
+      attempts: 3,
+      backoffMs: 500,
+    });
 
-  if (!playerResponse.ok) {
-    throw new Error(`YouTube player API error ${playerResponse.status}`);
+    if (watchResponse.ok) {
+      watchHtml = await watchResponse.text();
+      const apiKey = extractInnertubeApiKey(watchHtml);
+      if (apiKey) {
+        const playerResponse = await fetchWithRetry(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}&prettyPrint=false`, {
+          method: "POST",
+          headers: {
+            "User-Agent": ANDROID_USER_AGENT,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Origin: "https://www.youtube.com",
+            Referer: watchResponse.url || watchUrl,
+            "X-YouTube-Client-Name": "3",
+            "X-YouTube-Client-Version": ANDROID_CLIENT_VERSION,
+          },
+          body: JSON.stringify({
+            context: {
+              client: {
+                clientName: "ANDROID",
+                clientVersion: ANDROID_CLIENT_VERSION,
+                hl: "en",
+                gl: "US",
+              },
+            },
+            videoId,
+            contentCheckOk: true,
+            racyCheckOk: true,
+          }),
+        }, {
+          attempts: 3,
+          backoffMs: 500,
+        });
+
+        if (playerResponse.ok) {
+          const payload = await playerResponse.json() as PlayerResponse;
+          const playability = payload.playabilityStatus?.status;
+          if (!playability || playability === "OK") {
+            return payload;
+          }
+        }
+      }
+    }
+  } catch {
+    // Fall back to HTML parsing and get_video_info when direct Innertube access fails.
   }
 
-  const payload = await playerResponse.json() as PlayerResponse;
-  const playability = payload.playabilityStatus?.status;
-  if (playability && playability !== "OK") {
-    throw new Error(
-      payload.playabilityStatus?.reason
-      ?? payload.playabilityStatus?.messages?.[0]
-      ?? `YouTube playability status ${playability}`,
-    );
+  if (watchHtml) {
+    const htmlPayload = parsePlayerResponseFromHtml(watchHtml);
+    if (htmlPayload) return htmlPayload;
   }
 
-  return payload;
+  const infoPayload = await fetchPlayerResponseFromGetVideoInfo(videoId);
+  if (infoPayload) return infoPayload;
+
+  throw new Error("Could not read YouTube player configuration");
 };
 
 const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
@@ -247,17 +251,21 @@ const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
   return best?.url ? normalizeUrl(best.url) : null;
 };
 
-const bestVideoStream = (video: YouTubeVideo) =>
-  video.formatStreams
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
-    .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality))[0] ?? null;
+const allVideoStreams = (video: YouTubeVideo) =>
+  (video.formatStreams ?? [])
+    .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
+    .sort((a, b) => numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality));
 
-const bestAdaptiveVideoStream = (video: YouTubeVideo) =>
-  video.adaptiveFormats
-    ?.filter((stream) => stream.url && stream.mimeType?.includes("video/mp4"))
+const bestVideoStream = (video: YouTubeVideo) => allVideoStreams(video)[0] ?? null;
+
+const allAdaptiveVideoStreams = (video: YouTubeVideo) =>
+  (video.adaptiveFormats ?? [])
+    .filter((stream) => stream.url && stream.mimeType?.includes("video/"))
     .sort((a, b) =>
       numericQuality(b.qualityLabel ?? b.quality) - numericQuality(a.qualityLabel ?? a.quality)
-      || numericBitrate(b.bitrate) - numericBitrate(a.bitrate))[0] ?? null;
+      || numericBitrate(b.bitrate) - numericBitrate(a.bitrate));
+
+const bestAdaptiveVideoStream = (video: YouTubeVideo) => allAdaptiveVideoStreams(video)[0] ?? null;
 
 const bestAudioStream = (video: YouTubeVideo) =>
   video.adaptiveFormats
@@ -271,6 +279,9 @@ const bestMp4AudioStream = (video: YouTubeVideo) =>
 
 const audioExtension = (stream: StreamFormat | null | undefined) =>
   stream?.mimeType?.includes("webm") ? "webm" : "m4a";
+
+const videoExtension = (stream: StreamFormat | null | undefined) =>
+  stream?.mimeType?.includes("webm") ? "webm" : "mp4";
 
 const toYouTubeVideo = (payload: PlayerResponse): YouTubeVideo => ({
   title: payload.videoDetails?.title ?? joinRuns(payload.microformat?.playerMicroformatRenderer?.title) ?? "YouTube media",
@@ -314,7 +325,7 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
   }
   if (canMerge && adaptiveVideoStream?.url && preferredMp4AudioStream?.url) {
     downloads.push({
-      label: "Merged MP4",
+      label: `Merged MP4 (${adaptiveVideoStream.qualityLabel ?? adaptiveVideoStream.quality ?? 'Unknown'})`,
       url: adaptiveVideoStream.url,
       filename: `${videoId}.mp4`,
       functionName: "youtube-download",
@@ -323,18 +334,31 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
       mergeAudioUrl: preferredMp4AudioStream.url,
     });
   }
-  if (videoStream?.url) {
-    downloads.push({
-      label: [
-        videoStream.qualityLabel ?? videoStream.quality ?? "Video",
-        canMerge || separateTracks ? "video only" : null,
-      ].filter(Boolean).join(" "),
-      url: videoStream.url,
-      filename: `${videoId}.mp4`,
-      functionName: "youtube-download",
-      quality: videoStream.qualityLabel ?? videoStream.quality ?? null,
-    });
+
+  for (const vid of allAdaptiveVideoStreams(video)) {
+    if (vid.url && vid.mimeType?.includes("video")) {
+      downloads.push({
+        label: `Video ${vid.qualityLabel ?? vid.quality ?? 'Unknown'} (video only)`,
+        url: vid.url,
+        filename: `${videoId}-${vid.qualityLabel ?? 'video'}.${videoExtension(vid)}`,
+        functionName: "youtube-download",
+        quality: vid.qualityLabel ?? vid.quality ?? null,
+      });
+    }
   }
+
+  for (const vid of allVideoStreams(video)) {
+    if (vid.url) {
+      downloads.push({
+        label: `${vid.qualityLabel ?? 'Video'} (with audio)`,
+        url: vid.url,
+        filename: `${videoId}-${vid.qualityLabel ?? 'video'}.${videoExtension(vid)}`,
+        functionName: "youtube-download",
+        quality: vid.qualityLabel ?? vid.quality ?? null,
+      });
+    }
+  }
+
   if (mode !== "audio" && audioStream?.url) {
     downloads.push({
       label: "Audio",
@@ -344,12 +368,15 @@ const makeVideoItem = (videoId: string, video: YouTubeVideo, mode: string) => {
       quality: audioStream.audioQuality ?? null,
     });
   }
-  downloads.push({
-    label: "Thumbnail",
-    url: thumbnail,
-    filename: `${videoId}-thumbnail.jpg`,
-    functionName: "youtube-download",
-  });
+
+  if (downloads.length > 0) {
+    downloads.push({
+      label: "Thumbnail",
+      url: thumbnail,
+      filename: `${videoId}-thumbnail.jpg`,
+      functionName: "youtube-download",
+    });
+  }
 
   return {
     id: videoId,

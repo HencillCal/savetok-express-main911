@@ -217,6 +217,36 @@ const parsePlayerResponseFromHtml = (html: string): PlayerResponse | null => {
   return null;
 };
 
+const extractPlayerResponseFromGetVideoInfo = (payload: string): PlayerResponse | null => {
+  try {
+    const params = new URLSearchParams(payload);
+    const playerResponse = params.get("player_response") ?? params.get("playerResponse");
+    if (!playerResponse) return null;
+    return JSON.parse(playerResponse) as PlayerResponse;
+  } catch {
+    return null;
+  }
+};
+
+const fetchPlayerResponseFromGetVideoInfo = async (videoId: string): Promise<PlayerResponse | null> => {
+  const infoUrl = `https://www.youtube.com/get_video_info?video_id=${encodeURIComponent(videoId)}&eurl=https://youtube.googleapis.com/v/${encodeURIComponent(videoId)}&hl=en&gl=US&html5=1`;
+  const response = await fetchWithRetry(infoUrl, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/x-www-form-urlencoded, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      Referer: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
+    },
+  }, {
+    attempts: 3,
+    backoffMs: 500,
+  });
+
+  if (!response.ok) return null;
+  const body = await response.text();
+  return extractPlayerResponseFromGetVideoInfo(body);
+};
+
 const extractPlaylistId = (value: string) => {
   try {
     const url = new URL(value);
@@ -258,72 +288,76 @@ const extractInnertubeApiKey = (html: string) =>
 
 const fetchFromInnertube = async (videoId: string): Promise<PlayerResponse> => {
   const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&bpctr=9999999999&has_verified=1&hl=en`;
-  const watchResponse = await fetchWithRetry(watchUrl, {
-    headers: {
-      "User-Agent": USER_AGENT,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-  }, {
-    attempts: 3,
-    backoffMs: 500,
-  });
+  let watchHtml: string | null = null;
 
-  if (!watchResponse.ok) {
-    throw new Error(`YouTube watch page error ${watchResponse.status}`);
-  }
-
-  const watchHtml = await watchResponse.text();
-  const apiKey = extractInnertubeApiKey(watchHtml);
-  if (!apiKey) {
-    throw new Error("Could not read YouTube player configuration");
-  }
-
-  const playerResponse = await fetchWithRetry(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}&prettyPrint=false`, {
-    method: "POST",
-    headers: {
-      "User-Agent": ANDROID_USER_AGENT,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "Accept-Language": "en-US,en;q=0.9",
-      Origin: "https://www.youtube.com",
-      Referer: watchResponse.url || watchUrl,
-      "X-YouTube-Client-Name": "3",
-      "X-YouTube-Client-Version": ANDROID_CLIENT_VERSION,
-    },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: "ANDROID",
-          clientVersion: ANDROID_CLIENT_VERSION,
-          hl: "en",
-          gl: "US",
-        },
+  try {
+    const watchResponse = await fetchWithRetry(watchUrl, {
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
       },
-      videoId,
-      contentCheckOk: true,
-      racyCheckOk: true,
-    }),
-  }, {
-    attempts: 3,
-    backoffMs: 500,
-  });
+    }, {
+      attempts: 3,
+      backoffMs: 500,
+    });
 
-  if (!playerResponse.ok) {
-    throw new Error(`YouTube player API error ${playerResponse.status}`);
+    if (watchResponse.ok) {
+      watchHtml = await watchResponse.text();
+      const apiKey = extractInnertubeApiKey(watchHtml);
+      if (apiKey) {
+        const playerResponse = await fetchWithRetry(`https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}&prettyPrint=false`, {
+          method: "POST",
+          headers: {
+            "User-Agent": ANDROID_USER_AGENT,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            Origin: "https://www.youtube.com",
+            Referer: watchResponse.url || watchUrl,
+            "X-YouTube-Client-Name": "3",
+            "X-YouTube-Client-Version": ANDROID_CLIENT_VERSION,
+          },
+          body: JSON.stringify({
+            context: {
+              client: {
+                clientName: "ANDROID",
+                clientVersion: ANDROID_CLIENT_VERSION,
+                hl: "en",
+                gl: "US",
+              },
+            },
+            videoId,
+            contentCheckOk: true,
+            racyCheckOk: true,
+          }),
+        }, {
+          attempts: 3,
+          backoffMs: 500,
+        });
+
+        if (playerResponse.ok) {
+          const payload = await playerResponse.json() as PlayerResponse;
+          const playability = payload.playabilityStatus?.status;
+          if (!playability || playability === "OK") {
+            return payload;
+          }
+        }
+      }
+    }
+  } catch {
+    // Fall back to HTML parsing and get_video_info when direct Innertube access fails.
   }
 
-  const payload = await playerResponse.json() as PlayerResponse;
-  const playability = payload.playabilityStatus?.status;
-  if (playability && playability !== "OK") {
-    throw new Error(
-      payload.playabilityStatus?.reason
-      ?? payload.playabilityStatus?.messages?.[0]
-      ?? `YouTube playability status ${playability}`,
-    );
+  if (watchHtml) {
+    const htmlPayload = parsePlayerResponseFromHtml(watchHtml);
+    if (htmlPayload) return htmlPayload;
   }
 
-  return payload;
+  const infoPayload = await fetchPlayerResponseFromGetVideoInfo(videoId);
+  if (infoPayload) return infoPayload;
+
+  throw new Error("Could not read YouTube player configuration");
 };
 
 const bestThumbnail = (thumbnails: Thumbnail[] | undefined) => {
