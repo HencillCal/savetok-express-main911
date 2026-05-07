@@ -88,6 +88,7 @@ export const MediaDownloaderPage = ({
   const [queueRunning, setQueueRunning] = useState(false);
   const [zipRunning, setZipRunning] = useState(false);
   const [pattern, setPattern] = useState<string>(DEFAULT_PATTERN);
+  const [udemyApiToken, setUdemyApiToken] = useState("");
   const { add } = useDownloadHistory();
 
   const activeMode = modes.find((item) => item.id === mode) ?? modes[0];
@@ -116,10 +117,14 @@ export const MediaDownloaderPage = ({
 
     try {
       const resolvedInput = await resolveInputUrl(trimmed);
-      const payload = await invokePublicFunction<MediaResult>(functionName, {
+      const requestBody: Record<string, unknown> = {
         url: resolvedInput.url,
         mode,
-      });
+      };
+      if (udemyApiToken.trim()) {
+        requestBody.udemy_api_token = udemyApiToken.trim();
+      }
+      const payload = await invokePublicFunction<MediaResult>(functionName, requestBody);
       if (!payload.items?.length) throw new Error("No downloadable media found");
       setResult(payload);
       add(buildHistoryEntry(resolvedInput.url, payload));
@@ -306,6 +311,25 @@ export const MediaDownloaderPage = ({
                 )}
               </Button>
             </Card>
+            {(activeMode.id === "course" || activeMode.id === "owner") && (
+              <Card className="mt-3 rounded-xl border border-border bg-background/70 p-3 shadow-soft">
+                <label className="block text-xs font-medium text-muted-foreground" htmlFor="udemy-api-token">
+                  Udemy API token
+                </label>
+                <Input
+                  id="udemy-api-token"
+                  type="password"
+                  value={udemyApiToken}
+                  onChange={(e) => setUdemyApiToken(e.target.value)}
+                  placeholder="Paste Udemy API token or bearer token"
+                  disabled={loading}
+                  className="mt-1 h-12 border-0 bg-transparent text-base shadow-none focus-visible:ring-0"
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Required for full course/owner access when the course content is not publicly previewable.
+                </p>
+              </Card>
+            )}
             <p className="mt-2 text-xs text-muted-foreground">
               Expecting a URL matching <code className="rounded bg-muted px-1 py-0.5">{activeMode.expectedHint}</code>
             </p>

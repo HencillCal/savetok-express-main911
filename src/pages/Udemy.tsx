@@ -18,7 +18,7 @@ const modes: DownloaderMode[] = [
   {
     id: "course",
     label: "Course",
-    description: "Course page — lists preview assets; owner-only downloads need credentials",
+    description: "Course page — lists preview assets and accepts owner credentials for full course access",
     icon: Book,
     placeholder: "https://www.udemy.com/course/slug/",
     expectedHint: "udemy.com/course/...",
@@ -27,7 +27,7 @@ const modes: DownloaderMode[] = [
   {
     id: "owner",
     label: "Owner",
-    description: "Instructor / owner access (requires Udemy API token)",
+    description: "Instructor / owner access (requires Udemy API token or bearer token)",
     icon: Video,
     placeholder: "https://www.udemy.com/course/slug/",
     expectedHint: "udemy.com/course/... (requires credentials)",

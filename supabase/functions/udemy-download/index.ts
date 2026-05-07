@@ -35,6 +35,148 @@ const extractMp4Urls = (html: string) => {
   return Array.from(urls);
 };
 
+const parseCourseSlug = (url: string) => {
+  const match = url.match(/udemy\.com\/course\/([^\/?#]+)/i);
+  return match ? match[1] : null;
+};
+
+const buildUdemyHeaders = (token?: string, cookie?: string) => {
+  const headers: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    Referer: "https://www.udemy.com/",
+    "X-Requested-With": "XMLHttpRequest",
+  };
+
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+};
+
+const deepCollectMediaUrls = (value: unknown) => {
+  const urls = new Set<string>();
+  const addUrl = (candidate: string) => {
+    const cleaned = candidate.trim().replace(/\\u0026/g, "&");
+    if (/\.(m3u8|mp4)(?:[?\s]|$)/i.test(cleaned) || /\/assets\/.*\/hls\//i.test(cleaned)) {
+      urls.add(cleaned);
+    }
+  };
+
+  const collect = (current: unknown) => {
+    if (typeof current === "string") {
+      const matches = current.match(/https?:\/\/[^"'\s>]+/gi);
+      matches?.forEach(addUrl);
+      return;
+    }
+    if (Array.isArray(current)) {
+      current.forEach(collect);
+      return;
+    }
+    if (typeof current === "object" && current !== null) {
+      for (const nested of Object.values(current)) {
+        collect(nested);
+      }
+    }
+  };
+
+  collect(value);
+  return Array.from(urls);
+};
+
+const getDownloadLabel = (url: string) => {
+  if (/\.m3u8/i.test(url)) return "HLS playlist";
+  if (/\.mp4/i.test(url)) return "MP4 video";
+  return "Udemy media";
+};
+
+const getDownloadFilename = (courseTitle: string | null, lectureTitle: string, url: string, index: number) => {
+  const extensionMatch = url.match(/\.(m3u8|mp4)(?:[?]|$)/i);
+  const extension = extensionMatch?.[1] ?? "mp4";
+  const base = courseTitle ? `${courseTitle} ${lectureTitle}` : lectureTitle;
+  return `${sanitizeFilename(`${base}`)}.${extension}`;
+};
+
+const fetchUdemyJson = async (url: string, token?: string, cookie?: string) => {
+  const resp = await fetchWithRetry(url, {
+    headers: buildUdemyHeaders(token, cookie),
+    redirect: "follow",
+  }, { attempts: 3, backoffMs: 500 });
+
+  let data: unknown = null;
+  try {
+    data = await resp.json();
+  } catch {
+    // ignore parse errors
+  }
+
+  return { resp, data } as const;
+};
+
+const fetchUdemyText = async (url: string, token?: string, cookie?: string) => {
+  const resp = await fetchWithRetry(url, {
+    headers: buildUdemyHeaders(token, cookie),
+    redirect: "follow",
+  }, { attempts: 3, backoffMs: 500 });
+
+  const text = resp.ok ? await resp.text() : null;
+  return { resp, text } as const;
+};
+
+const resolveUdemyCourse = async (slug: string, token?: string, cookie?: string) => {
+  const url = `https://www.udemy.com/api-2.0/courses/${encodeURIComponent(slug)}/?fields[course]=id,title,headline,image_480x270`;
+  const result = await fetchUdemyJson(url, token, cookie);
+  if (result.resp.ok && result.data && typeof result.data === "object" && "id" in result.data) {
+    return result.data as Record<string, unknown>;
+  }
+
+  const searchUrl = `https://www.udemy.com/api-2.0/courses/?search=${encodeURIComponent(slug)}&page_size=20`;
+  const searchResult = await fetchUdemyJson(searchUrl, token, cookie);
+  if (searchResult.resp.ok && searchResult.data && typeof searchResult.data === "object") {
+    const results = Array.isArray((searchResult.data as Record<string, unknown>).results)
+      ? ((searchResult.data as Record<string, unknown>).results as unknown[])
+      : [];
+    if (results.length) {
+      const candidate = results.find((item) =>
+        typeof item === "object" && item !== null && "url" in item && typeof (item as Record<string, unknown>).url === "string" && (item as Record<string, unknown>).url?.includes(`/course/${slug}/`),
+      ) as Record<string, unknown> | undefined;
+      return (candidate ?? results[0]) as Record<string, unknown>;
+    }
+  }
+
+  throw new Error("Could not resolve Udemy course slug to a course record.");
+};
+
+const fetchCourseCurriculumItems = async (courseId: string | number, token?: string, cookie?: string) => {
+  const endpoints = [
+    `https://www.udemy.com/api-2.0/courses/${encodeURIComponent(String(courseId))}/subscriber-curriculum-items/?page_size=500`,
+    `https://www.udemy.com/api-2.0/courses/${encodeURIComponent(String(courseId))}/cached-subscriber-curriculum-items/?page_size=500`,
+    `https://www.udemy.com/api-2.0/courses/${encodeURIComponent(String(courseId))}/public-curriculum-items/?page_size=500`,
+  ];
+
+  for (const endpoint of endpoints) {
+    const result = await fetchUdemyJson(endpoint, token, cookie);
+    if (result.resp.ok && result.data && typeof result.data === "object" && Array.isArray((result.data as Record<string, unknown>).results)) {
+      return (result.data as Record<string, unknown>).results as unknown[];
+    }
+  }
+
+  throw new Error("Failed to fetch Udemy course curriculum. Ensure the token is valid and the course is accessible.");
+};
+
+const fetchLecturePageMediaUrls = async (slug: string, lectureId: string | number, token?: string, cookie?: string) => {
+  const lectureUrl = `https://www.udemy.com/course/${encodeURIComponent(slug)}/learn/lecture/${encodeURIComponent(String(lectureId))}`;
+  const result = await fetchUdemyText(lectureUrl, token, cookie);
+  if (!result.resp.ok || !result.text) return [];
+  return deepCollectMediaUrls(result.text);
+};
+
+const fetchLectureDetails = async (lectureId: string | number, token?: string, cookie?: string) => {
+  const url = `https://www.udemy.com/api-2.0/lectures/${encodeURIComponent(String(lectureId))}/?fields[lecture]=id,headline,description,asset,media`;
+  const result = await fetchUdemyJson(url, token, cookie);
+  return result.resp.ok && result.data && typeof result.data === "object" ? (result.data as Record<string, unknown>) : null;
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
@@ -167,45 +309,115 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Owner / instructor flow (requires Udemy API token or client credentials)
+    // Owner / course flow (requires Udemy API token or client credentials)
     if (requestedMode === "owner" || requestedMode === "course") {
       const token = body?.udemy_api_token || Deno.env.get("UDEMY_API_TOKEN");
-      if (!token) {
+      const cookie = typeof body?.udemy_cookie === "string" ? body.udemy_cookie : undefined;
+      if (!token && !cookie) {
         return json({
           error:
-            "Owner mode requires a Udemy API token. Provide `udemy_api_token` in the request body or set the UDEMY_API_TOKEN environment variable.\n" +
-            "I can implement full course exports once you confirm you own the content and provide credentials.",
+            "Owner/course mode requires authentication. Provide `udemy_api_token` in the request body or set UDEMY_API_TOKEN in the environment. " +
+            "If you prefer session cookies, send `udemy_cookie` instead.",
         }, 400);
       }
 
-      // Basic implementation attempt: try Udemy API search by course slug (best-effort).
-      // NOTE: Udemy API access and exact endpoints may differ; this is a best-effort scaffold.
       try {
-        // Try to extract a course slug from the final URL
-        const slugMatch = finalUrl.match(/udemy\.com\/course\/([^\/\?]+)/i);
-        const slug = slugMatch ? slugMatch[1] : null;
+        const slug = parseCourseSlug(finalUrl);
         if (!slug) return json({ error: "Could not determine course slug from URL" }, 400);
 
-        // Use Udemy API search endpoint (requires valid token)
-        const apiResp = await fetchWithRetry(`https://www.udemy.com/api-2.0/courses/?search=${encodeURIComponent(slug)}`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "User-Agent": USER_AGENT,
-            Accept: "application/json",
-          },
-        }, { attempts: 3, backoffMs: 500 });
+        const course = await resolveUdemyCourse(slug, token, cookie);
+        const courseId = course.id ?? course.course_id ?? null;
+        if (!courseId) return json({ error: "Could not resolve course ID from Udemy API response" }, 502);
 
-        if (!apiResp.ok) {
-          const txt = await apiResp.text().catch(() => "");
-          return json({ error: `Udemy API error ${apiResp.status}: ${txt}` }, 502);
+        const courseTitle = typeof course.title === "string" ? course.title : null;
+        const courseCover = typeof course.image_480x270 === "string" ? course.image_480x270 : null;
+        const curriculumItems = await fetchCourseCurriculumItems(courseId, token, cookie);
+
+        const lectureItems = curriculumItems.filter((item) => {
+          if (item && typeof item === "object") {
+            const record = item as Record<string, unknown>;
+            return record.object_type === "lecture" || record.type === "lecture" || record.lecture != null || record.asset != null || record.media != null;
+          }
+          return false;
+        });
+
+        const items = [] as Array<{
+          id: string;
+          type: "video";
+          title: string;
+          description: string | null;
+          thumbnail: string | null;
+          downloads: Array<{
+            label: string;
+            url: string;
+            filename: string;
+            functionName: string;
+          }>;
+        }>;
+
+        for (let index = 0; index < lectureItems.length; index += 1) {
+          const rawItem = lectureItems[index] as Record<string, unknown>;
+          const lecture = (rawItem.lecture && typeof rawItem.lecture === "object") ? (rawItem.lecture as Record<string, unknown>) : rawItem;
+          const lectureId = String(lecture.id ?? rawItem.object_id ?? rawItem.id ?? index + 1);
+          const lectureTitle =
+            typeof lecture.headline === "string" ? lecture.headline :
+            typeof lecture.title === "string" ? lecture.title :
+            typeof rawItem.title === "string" ? rawItem.title :
+            `Lecture ${index + 1}`;
+          const lectureDescription =
+            typeof lecture.description === "string" ? lecture.description :
+            typeof rawItem.title === "string" ? rawItem.title :
+            null;
+
+          let mediaUrls = deepCollectMediaUrls(lecture.asset ?? lecture.media ?? rawItem);
+          if (!mediaUrls.length) {
+            const lectureDetails = await fetchLectureDetails(lectureId, token, cookie);
+            if (lectureDetails) {
+              mediaUrls = deepCollectMediaUrls(lectureDetails);
+            }
+          }
+          if (!mediaUrls.length) {
+            mediaUrls = await fetchLecturePageMediaUrls(slug, lectureId, token, cookie);
+          }
+
+          if (!mediaUrls.length) continue;
+
+          const downloads = mediaUrls.map((url, downloadIndex) => ({
+            label: downloadIndex === 0 ? getDownloadLabel(url) : `${getDownloadLabel(url)} ${downloadIndex + 1}`,
+            url,
+            filename: getDownloadFilename(courseTitle, lectureTitle, url, downloadIndex),
+            functionName: "udemy-download",
+          }));
+
+          items.push({
+            id: `lecture-${lectureId}`,
+            type: "video",
+            title: lectureTitle,
+            description: lectureDescription,
+            thumbnail: null,
+            downloads,
+          });
         }
 
-        const payload = await apiResp.json();
-        // Sanity check — return list of courses found; full curriculum extraction requires further API calls and permission checks.
-        return json({ message: "Udemy owner API scaffold: course search returned", payload });
+        if (!items.length) {
+          return json({ error: "Authenticated Udemy course access succeeded, but no downloadable media could be found." }, 404);
+        }
+
+        return json({
+          platform: "udemy",
+          sourceType: requestedMode,
+          title: courseTitle,
+          caption: null,
+          username: null,
+          authorName: null,
+          profilePic: null,
+          cover: courseCover,
+          items,
+          resolvedUrl: finalUrl,
+        });
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "Udemy API request failed";
-        return json({ error: msg }, 500);
+        const message = err instanceof Error ? err.message : "Udemy owner/course request failed";
+        return json({ error: message }, 500);
       }
     }
 
