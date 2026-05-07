@@ -487,13 +487,98 @@ export const handleYouTubeDownload = async (req: Request) => {
       return json({ error: "Please enter a valid YouTube video, Shorts, or music URL" }, 400);
     }
 
-    const payload = await fetchFromInnertube(videoId);
-    const video = toYouTubeVideo(payload);
-    const item = makeVideoItem(videoId, video, requestedMode);
-    if (!item.downloads.length) {
+    let payload: PlayerResponse | null = null;
+    let allErrors: string[] = [];
+    let item: ReturnType<typeof makeVideoItem> | null = null;
+    
+    // Try Innertube first
+    try {
+      payload = await fetchFromInnertube(videoId);
+      const video = toYouTubeVideo(payload as PlayerResponse);
+      item = makeVideoItem(videoId, video, requestedMode);
+      
+      // If Innertube succeeds but returns zero streams, continue to fallback methods
+      if (!item.downloads.length) {
+        allErrors.push("Innertube: No downloadable streams returned");
+        payload = null;
+        item = null;
+      }
+    } catch (innertubeErr) {
+      allErrors.push(`Innertube: ${innertubeErr instanceof Error ? innertubeErr.message : String(innertubeErr)}`);
+    }
+
+    // If Innertube didn't work, try Invidious
+    if (!payload) {
+      try {
+        const inv = await fetchFromInvidious<any>(`/videos/${videoId}`);
+        // Map Invidious response shape to PlayerResponse-ish object for downstream helpers.
+        const mapped: PlayerResponse = {
+          videoDetails: {
+            title: inv.title ?? inv.videoTitle ?? undefined,
+            author: inv.author ?? undefined,
+            channelId: inv.authorId ?? undefined,
+            shortDescription: inv.description ?? undefined,
+            thumbnail: { thumbnails: inv.videoThumbnails ?? inv.thumbnails ?? [] },
+          },
+          streamingData: {
+            formats: (inv.formatStreams ?? inv.format ?? inv.formats ?? []) as StreamFormat[],
+            adaptiveFormats: (inv.adaptiveFormats ?? inv.adaptiveFormats ?? []) as StreamFormat[],
+          },
+        } as PlayerResponse;
+        const video = toYouTubeVideo(mapped);
+        item = makeVideoItem(videoId, video, requestedMode);
+        
+        if (!item.downloads.length) {
+          allErrors.push("Invidious: No downloadable streams returned");
+          item = null;
+        } else {
+          payload = mapped;
+        }
+      } catch (invErr) {
+        allErrors.push(`Invidious: ${invErr instanceof Error ? invErr.message : String(invErr)}`);
+      }
+    }
+
+    // If still no payload, try parsing the watch page HTML as a last-resort fallback
+    if (!payload) {
+      try {
+        const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+        const resp = await fetchWithRetry(watchUrl, {
+          headers: {
+            "User-Agent": USER_AGENT,
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        }, { attempts: 2, backoffMs: 400 });
+
+        if (resp.ok) {
+          const html = await resp.text();
+          const parsed = parsePlayerResponseFromHtml(html);
+          if (parsed) {
+            const video = toYouTubeVideo(parsed);
+            item = makeVideoItem(videoId, video, requestedMode);
+            if (item.downloads.length) {
+              payload = parsed;
+            } else {
+              allErrors.push("HTML parser: No downloadable streams found");
+            }
+          } else {
+            throw new Error("Could not parse ytInitialPlayerResponse from watch page");
+          }
+        } else {
+          throw new Error(`Watch page returned ${resp.status}`);
+        }
+      } catch (htmlErr) {
+        allErrors.push(`HTML parser: ${htmlErr instanceof Error ? htmlErr.message : String(htmlErr)}`);
+      }
+    }
+
+    // If we still don't have any downloads, return error
+    if (!item || !item.downloads.length) {
       return json({ error: "No downloadable streams were found for that video" }, 404);
     }
 
+    const video = toYouTubeVideo(payload as PlayerResponse);
     return json({
       platform: "youtube",
       sourceType: requestedMode,
